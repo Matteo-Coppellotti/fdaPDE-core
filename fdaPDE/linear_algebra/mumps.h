@@ -4,6 +4,9 @@
 #include <Eigen/Sparse>
 #include <vector>
 #include <algorithm>
+#include <iostream>
+#include <string>
+#include <concepts>
 
 #include <mpi.h>
 #include <Mumps/dmumps_c.h>
@@ -21,8 +24,11 @@
 #define RINFO(I) rinfo[(I) - 1]
 #define RINFOG(I) rinfog[(I) - 1]
 
-namespace Eigen // fdapde
-{
+using namespace Eigen;
+using namespace internal;
+
+// namespace fdapde// fdapde
+// {
 
 // PardisoLU eigen
 
@@ -43,60 +49,74 @@ namespace Eigen // fdapde
 
     // concepts: get in a matrix of any type and convert it to an eigen sparse -> in MumpsBase put the convesrsion method
 
-    //to implement:
+    // LIST OF CONCEPTS
+    // 1. SparseMatrixType
+    // 2. VectorType
+    // 3. ScalarType
+    // 4. IndexType
 
-    template <typename MatrixType_> //--> CRTP???? (with this as base class)
-    class MumpsBase;
+    // LIST OF CLASSES
+    // 1. MumpsBase
+    // 2. MumpsLU
+    // 3. MumpsLDLT
+    // 4. MumpsBLR
+    // 5. MumpsRankRevealing
+    // 6. MumpsDeterminant
+
+    // CONCEPTS IMPLEMENTATION
+    /*
+    template <typename T>
+    concept SparseMatrixType = requires(T t)
+    {
+        { t.rows() }
+        ->std::same_as<int>;
+        { t.cols() }
+        ->std::same_as<int>;
+        { t.nonZeros() }
+        ->std::same_as<int>;
+        { t.innerIndexPtr() }
+        ->std::same_as<const int *>;
+        { t.outerIndexPtr() }
+        ->std::same_as<const int *>;
+    };
+
+    template <typename T>
+    concept VectorType = requires(T t)
+    {
+        { t.size() }
+        ->std::same_as<int>;
+        { t.data() }
+        ->std::same_as<double *>;
+    };
+
+    template <typename T>
+    concept ScalarType = std::is_arithmetic<T>::value;
+    */
+
+    // FORWARD DECLARATIONS
+    template <typename MatrixType_>
+    class MumpsLU;
+    template <typename MatrixType_>
+    class MumpsLDLT;
+    template <typename MatrixType_>
+    class MumpsBLR;
+    template <typename MatrixType_>
+    class MumpsRankRevealing;
+    template <typename MatrixType_>
+    class MumpsDeterminant;
+
+    // MUMPS BASE CLASS
+    template <typename MatrixType_> //--> CRTP???? (with this as base class) ---> concept ????
+    class MumpsBase
+    {
+
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
+
     //template <typename Derived>
     //class MumpsBase : public SparseSolverBase<Derived> // ???????????????? -> check what i'm inheriting from SparseSolverBase, 
                                                         // do i implement solve or _solve_impl???? -> chech the code of the public methods, 
-                                                        // PardisoLU defines only _solve_impl
-
-    template <typename MatrixType_>
-    class MumpsLU : protected MumpsBase<MatrixType_>;
-    //template <typename MatrixType_>
-    //class MumpsLU : protected MumpsBase< MumpsLU<typename MatrixType_>>;
-
-    template <typename MatrixType_>
-    class MumpsLDLT : protected MumpsBase<MatrixType_>;
-    //template <typename MatrixType_>
-    //class MumpsLDLT : protected MumpsBase< MumpsLDLT<typename MatrixType_>>;
-
-    template <typename MatrixType_>
-    class MumpsBLR : protected MumpsBase<MatrixType_>;
-    //template <typename MatrixType_>
-    //class MumpsBLR : protected MumpsBase< MumpsBLR<typename MatrixType_>>;
-
-    template <typename MatrixType_>
-    class MumpsRankRevealing : protected MumpsBase<MatrixType_>;
-    //template <typename MatrixType_>
-    //class MumpsRankRevealing : protected MumpsBase< MumpsRankRevealing<typename MatrixType_>>;
-
-    template <typename MatrixType_>
-    class MumpsDeterminant : protected MumpsBase<MatrixType_>;
-    //template <typename MatrixType_>
-    //class MumpsDeterminant : protected MumpsBase< MumpsDeterminant<typename MatrixType_>>;
-
-    namespace internal
-    {
-
-        template <typename MatrixType_>
-        struct traits<MumpsBase<MatrixType_>>
-        {
-            typedef typename MatrixType_::Scalar Scalar;
-            typedef typename MatrixType_::StorageIndex StorageIndex;
-            typedef Matrix<Scalar, Dynamic, 1> VectorType;
-        };
-
-    }; // namespace internal
-
-
-    template <typename MatrixType_>
-    class MumpsBase
-    {
-    //template <typename Derived>
-    //class MumpsBase : public SparseSolverBase<Derived> // ???????????????? -> check what i'm inheriting from SparseSolverBase, 
-                                                        // di i implement solve or _solve_impl???? -> chech the code of the public methods, 
                                                         // PardisoLU defines only _solve_impl
         // protected: mumps, matrix information, mpi stuff
         // public: setIcntl, setCntl, getIcntl, getCntl, errorCheck, handleError, handleWarning, getRinfo, getRinfog, getIinfo, getInfog, warning/error codes
@@ -115,10 +135,10 @@ namespace Eigen // fdapde
 
             MPI_Comm_rank(comm_, &rank_);
 
-            if (comm_ == MPI_COMM_WORLD)  // IS THIS ALLOWED? (look online for a better way of doing it if there is one)
-                mumps_.comm_fortran = USE_COMM_WORLD;
-            else
-                mumps_.comm_fortran = MPI_Comm_c2f(comm_);
+            // if (comm_ == MPI_COMM_WORLD)  // IS THIS ALLOWED? (look online for a better way of doing it if there is one)
+            //     mumps_.comm_fortran = USE_COMM_WORLD;
+            // else
+                mumps_.comm_fortran = (MUMPS_INT) MPI_Comm_c2f(comm_);
         }
 
         virtual ~MumpsBase()
@@ -150,18 +170,22 @@ namespace Eigen // fdapde
         {
             return mumps_.CNTL(index);
         }
+
         int get_INFO(int index) const
         {
             return mumps_.INFO(index);
         }
+
         int get_INFOG(int index) const
         {
             return mumps_.INFOG(index);
         }
+
         double get_RINFO(int index) const
         {
             return mumps_.RINFO(index);
-        }        
+        }      
+
         double get_RINFOG(int index) const
         {
             return mumps_.RINFOG(index);
@@ -191,7 +215,7 @@ namespace Eigen // fdapde
 
         // error / warning handling & error / warnings CODE GETTERS???
 
-        void errorCheck() const;
+        void errorCheck(bool warning_check) const;
         const std::string handleError(int error_1, double error_2) const;
         const std::string handleWarning(int warning_1, double warning_2) const;
 
@@ -223,6 +247,28 @@ namespace Eigen // fdapde
                           { idx += 1; });
             return indices;
         }
+
+        void mumps_execute(bool error_check = true, bool warning_check = false)
+        {
+            dmumps_c(&mumps_);
+
+            if (rank == 0 && error_check)
+            {
+                errorCheck(warning_check);
+            }
+        }
+
+        // ?????
+        // oid mumps_execute(int job, bool error_check = true)
+        // {
+        //     mumps_.job = job;
+        //     dmumps_c(&mumps_);
+
+        //     if (rank == 0 && error_check)
+        //     {
+        //         errorCheck();
+        //     }
+        // }
     };
 
 
@@ -232,6 +278,9 @@ namespace Eigen // fdapde
     // template <typename MatrixType_>
     // class MumpsLU : protected MumpsBase< MumpsLU<typename MatrixType_>>
     {
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
         // Solver with LU factorization
         // protected: i think nothing
         // public: solve() -> check on EigenSparseSolver how to implement it
@@ -245,7 +294,7 @@ namespace Eigen // fdapde
             mumps_.par = 1;
             mumps_.sym = 0;
             mumps_.job = JOB_INIT;
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // set default values for ICNTL
             mumps_.ICNTL(1) = -1; // output stream for error messages
@@ -258,7 +307,7 @@ namespace Eigen // fdapde
         {
             // finalize MUMPS
             mumps_.job = JOB_END;
-            dmumps_c(&mumps_);
+            mumps_execute();
         }
 
         // solve method
@@ -269,7 +318,8 @@ namespace Eigen // fdapde
             {
                 if (rank_ == 0)
                 {
-                    std::cerr << "You need to call define_matrix() before calling solve()" << std::endl;
+                    std::cerr << "You need to call define_matrix() before calling solve(rhs)"
+                                << " or alternatively call solve(matrix, rhs)" << std::endl;
                 }
                 exit(1);
             }
@@ -282,7 +332,7 @@ namespace Eigen // fdapde
             }
 
             mumps_.job = 6; // 6: analyze + factorize + solve
-            dmumps_c(&mumps_);
+            mumps_execute();
             
             // if (rank_ == 0)
             // {
@@ -306,7 +356,11 @@ namespace Eigen // fdapde
     template <typename MatrixType_>
     class MumpsLDLT : protected MumpsBase< MatrixType_>
     {
-        // Solver with LDLT factorization
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
+
+        // Solver with LDLT factorization -> symmetric and positive definite matrix only (only pass upper or lower triangular matrix)
         // protected: i think nothing
         // public: solve() -> check on EigenSparseSolver how to implement it
 
@@ -316,9 +370,9 @@ namespace Eigen // fdapde
         {
             // initialize MUMPS
             mumps_.par = 1;
-            mumps_.sym = 1;
+            mumps_.sym = 1; // -> symmetric and positive definite
             mumps_.job = JOB_INIT;
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // set default values for ICNTL
             mumps_.ICNTL(1) = -1; // output stream for error messages
@@ -331,7 +385,7 @@ namespace Eigen // fdapde
         {
             // finalize MUMPS
             mumps_.job = JOB_END;
-            dmumps_c(&mumps_);
+            mumps_execute();
         }
 
         VectorType solve(VectorType rhs)
@@ -341,7 +395,8 @@ namespace Eigen // fdapde
             {
                 if (rank_ == 0)
                 {
-                    std::cerr << "You need to call define_matrix() before calling solve()" << std::endl;
+                    std::cerr << "You need to call define_matrix() before calling solve(rhs)"
+                                << " or alternatively call solve(matrix, rhs)" << std::endl;
                 }
                 exit(1);
             }
@@ -354,7 +409,7 @@ namespace Eigen // fdapde
             }
 
             mumps_.job = 6; // 6: analyze + factorize + solve
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // if (rank_ == 0)
             // {
@@ -378,6 +433,10 @@ namespace Eigen // fdapde
     template <typename MatrixType_>
     class MumpsBLR : protected MumpsBase< MatrixType_>
     {
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
+
         // Solver with BLR factorization
         // protected: i think nothing
         // public: solve() -> check on EigenSparseSolver how to implement it
@@ -390,20 +449,48 @@ namespace Eigen // fdapde
             mumps_.par = 1;
             mumps_.sym = 0;
             mumps_.job = JOB_INIT;
-            dmumps_c(&mumps_);
+            mumps_execute();
 
-            // set default values for ICNTL
+            // set default values for ICNTL  --> CONSIDER CHANGING THESE FOR THE BLR STATISTICS OUTPUT
             mumps_.ICNTL(1) = -1; // output stream for error messages
             mumps_.ICNTL(2) = -1; // output stream for diagnostic printing
             mumps_.ICNTL(3) = -1; // output stream for global information
             mumps_.ICNTL(4) = 0;  // level of printing
-        }
+
+            // activate the BLR feature
+            mumps_.ICNTL(35) = 1; // 1: automatic choice of the BLR memory management strategy
+
+            //dropping parameter controlling the accuracy of the Block Low-Rank approximations
+            //mumps_.CNTL(7) = ...
+            // 0.0: full precision approximation (default)
+            // >0.0: the dropping parameter is CNTL(7)
+
+            // choice of the BLR factorization variant
+            //mumps_.ICNTL(36) = ... 
+            // 0: Standard UFSC variant with low-rank updates accumulation (LUA) (default)
+            // 1: UCFS variant with low-rank updates accumulation (LUA) 
+            //    (performing the compression earlier in order to further reduce the number of operations)
+
+            // compression of the contribution blocks (CB)
+            //mumps_.ICNTL(37) = ... 
+            // 0: blocks are not compressed (default)
+            // 1: blocks are compressed
+
+            // estimated compression rate of LU factors
+            //mumps_.ICNTL(38) = ... 
+            // between 0 and 1000 (default: 600)
+            // ICNTL(38)/10 is a percentage representing the typical compression of the compressed factors factor matrices in BLR fronts
+
+            // estimated compression rate of contribution blocks
+            //mumps_.ICNTL(39) = ...
+            // between 0 and 1000 (default: 500)
+            // ICNTL(39)/10 is a percentage representing the typical compression of the compressed CB CB in BLR fronts
 
         ~MumpsBLR() override
         {
             // finalize MUMPS
             mumps_.job = JOB_END;
-            dmumps_c(&mumps_);
+            mumps_execute();
         }
 
         VectorType solve(VectorType rhs)
@@ -413,7 +500,8 @@ namespace Eigen // fdapde
             {
                 if (rank_ == 0)
                 {
-                    std::cerr << "You need to call define_matrix() before calling solve()" << std::endl;
+                    std::cerr << "You need to call define_matrix() before calling solve(rhs)"
+                                << " or alternatively call solve(matrix, rhs)" << std::endl;
                 }
                 exit(1);
             }
@@ -426,7 +514,7 @@ namespace Eigen // fdapde
             }
 
             mumps_.job = 6; // 6: analyze + factorize + solve
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // if (rank_ == 0)
             // {
@@ -450,9 +538,18 @@ namespace Eigen // fdapde
     template <typename MatrixType_>
     class MumpsRankRevealing : protected MumpsBase< MatrixType_>
     {
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
+
         // Solver with rank revealing factorization
         // protected: i think nothing
         // public: solve() -> check on EigenSparseSolver how to implement it
+
+    protected:
+        int null_space_size_ = -1;
+        //VectorType null_space_basis_;
+        //bool null_space_basis_computed_ = false;
 
     public:
 
@@ -462,20 +559,23 @@ namespace Eigen // fdapde
             mumps_.par = 1;
             mumps_.sym = 0;
             mumps_.job = JOB_INIT;
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // set default values for ICNTL
             mumps_.ICNTL(1) = -1; // output stream for error messages
             mumps_.ICNTL(2) = -1; // output stream for diagnostic printing
             mumps_.ICNTL(3) = -1; // output stream for global information
             mumps_.ICNTL(4) = 0;  // level of printing
+
+            // set ICNTL(56) = 1 to perform rank revealing factorization
+            mumps_.ICNTL(56) = 1;
         }
 
         ~MumpsRankRevealing() override
         {
             // finalize MUMPS
             mumps_.job = JOB_END;
-            dmumps_c(&mumps_);
+            mumps_execute();
         }
 
         VectorType solve(VectorType rhs)
@@ -485,7 +585,8 @@ namespace Eigen // fdapde
             {
                 if (rank_ == 0)
                 {
-                    std::cerr << "You need to call define_matrix() before calling solve()" << std::endl;
+                    std::cerr << "You need to call define_matrix() before calling solve(rhs)"
+                                << " or alternatively call solve(matrix, rhs)" << std::endl;
                 }
                 exit(1);
             }
@@ -497,8 +598,11 @@ namespace Eigen // fdapde
                 mumps_.rhs = const_cast<Scalar *>(rhs.data());
             }
 
+            mumps_.ICNTL(25) = 0; // 0: perform a regular solution step 
+            // (if the matrix is found singular during factorization then one of the possible solutions is returned)
+
             mumps_.job = 6; // 6: analyze + factorize + solve
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // if (rank_ == 0)
             // {
@@ -515,6 +619,110 @@ namespace Eigen // fdapde
             define_matrix(matrix);
             return solve(rhs);
         }
+
+        int nullSpaceSize(bool recompute = false)
+        {
+            if(!matrix_defined_)
+            {
+                if (rank_ == 0)
+                {
+                    std::cerr << "You need to call define_matrix() before calling nullSpaceSize()" << std::endl;
+                }
+                exit(1);
+            }
+
+            if (null_space_size_ >= 0 && !recompute)
+            {
+                return null_space_size_;
+            }
+            
+            mumps_.job = 4;
+            mumps_execute();
+
+            null_space_size_ = mumps_.INFOG(28);
+
+            return null_space_size_;
+        }
+
+        int nullSpaceSize(const MatrixType &matrix)
+        {
+            define_matrix(matrix);
+            return nullSpaceSize(recompute = true);
+        }
+
+        VectorType nullSpaceBasis(bool recompute = false)
+        {
+            if(!matrix_defined_)
+            {
+                if (rank_ == 0)
+                {
+                    std::cerr << "You need to call define_matrix() before calling nullSpaceBasis()" << std::endl;
+                }
+                exit(1);
+            }
+
+            if(null_space_size_ == -1)
+            {
+                nullSpaceSize();
+            }
+
+            if(null_space_size_ == 0)
+            {
+                std::cout << "The matrix is full rank, the null space is empty" << std::endl;
+                return VectorType::Zero(mumps_.n);
+            }
+
+            //if(null_space_basis_computed_ && !recompute)
+            //{
+            //    return null_space_basis_;
+            //}
+
+            mumps_.ICNTL(25) = 1; // 1: perform a null space basis computation step
+            
+            // allocate memory for the null space basis
+            VectorType null_space_basis(null_space_size_ * mumps_.n);
+
+            if(rank_ == 0)
+            {
+                mumps_.rhs = null_space_basis.data();
+                mumps_.nrhs = null_space_size_;
+            }
+
+            mumps_.job = 6;
+            mumps_execute();
+
+            // covert null_space_basis to a matrix <------------------------------
+            //null_space_basis = MatrixType::Map(null_space_basis.data(), mumps_.n, null_space_size_);
+
+            //null_space_basis_= null_space_basis;
+            //null_space_basis_computed_ = true;
+            return null_space_basis;
+        }
+
+        VectorType nullSpaceBasis(const MatrixType &matrix)
+        {
+            define_matrix(matrix);
+            return nullSpaceBasis(recompute = true);
+        }
+
+        int rank()
+        {
+            if(!matrix_defined_)
+            {
+                if (rank_ == 0)
+                {
+                    std::cerr << "You need to call define_matrix() before calling rank()" << std::endl;
+                }
+                exit(1);
+            }
+            return mumps_.n - nullSpaceSize();
+        }
+
+        int rank(const MatrixType &matrix)
+        {
+            define_matrix(matrix);
+            return rank();
+        }
     };
 
 
@@ -522,9 +730,17 @@ namespace Eigen // fdapde
     template <typename MatrixType_>
     class MumpsDeterminant : protected MumpsBase< MatrixType_>
     {
+        using Scalar = MatrixType_::Scalar;
+        using StorageIndex = MatrixType_::StorageIndex;
+        using VectorType = Matrix<Scalar, Dynamic, 1>;
+
         // determinant computation
         // protected: i think nothing
         // public: solve() -> check on EigenSparseSolver how to implement it
+
+    protected:
+        // Scalar determinant_;
+        // bool determinant_computed_ = false;
 
     public:
 
@@ -534,7 +750,7 @@ namespace Eigen // fdapde
             mumps_.par = 1;
             mumps_.sym = 0;
             mumps_.job = JOB_INIT;
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // set default values for ICNTL
             mumps_.ICNTL(1) = -1; // output stream for error messages
@@ -550,16 +766,16 @@ namespace Eigen // fdapde
         {
             // finalize MUMPS
             mumps_.job = JOB_END;
-            dmumps_c(&mumps_);
+            mumps_execute();
         }
 
         Scalar solve(const MatrixType &matrix)
         {
             define_matrix(matrix);
-            return solve();
+            return solve(/*recompute = true*/); 
         }
 
-        Scalar solve()
+        Scalar solve(/*bool recompute = false*/)
         {
             // check if the matrix has been defined -> throw an error if not
             if (!matrix_defined_)
@@ -571,18 +787,33 @@ namespace Eigen // fdapde
                 exit(1);
             }
 
+            // if (determinant_computed_ && !recompute)
+            // {
+            //     return determinant_;
+            // }
+
             mumps_.job = 4; // 4: analyze + factorize
-            dmumps_c(&mumps_);
+            mumps_execute();
 
             // if (rank_ == 0)
             // {
             //     errorCheck();
             // }
 
-            return mumps_.RINFOG(12) * pow(2, mumps_.INFOG(34));
+            // determinant_ = mumps_.RINFOG(12) * pow(2, mumps_.INFOG(34));
+            // determinant_computed_ = true;
+
+            return determinant_;
         }
 
     };
+
+
+    template <typename MatrixType_>
+    class MumpsShurComplement : protected MumpsBase< MatrixType_>
+    {
+        // Shur complement computation
+        };
 
 
 // template <typename IteratorType>
@@ -591,7 +822,7 @@ namespace Eigen // fdapde
 
     // ERROR HANDLING
     template <typename MatrixType_>
-    void MumpsBase<MatrixType_> :: errorCheck() const
+    void MumpsBase<MatrixType_> :: errorCheck(bool warning_check) const
         {
             if (mumps_.INFOG(1) < 0)
             {
@@ -599,7 +830,7 @@ namespace Eigen // fdapde
                           << handleError(mumps_.INFOG(1), mumps_.INFOG(2)) << std::endl;
                 exit(1);
             }
-            if (mumps_.INFOG(1) > 0)
+            if (warning_check && mumps_.INFOG(1) > 0)
             {
                 std::cerr << "WARNING in MUMPS:\n"
                           << handleWarning(mumps_.INFOG(1), mumps_.INFOG(2)) << std::endl;
@@ -979,25 +1210,37 @@ namespace Eigen // fdapde
         {
             return "No warning";
         }
-        switch (warning_1)
+
+        std::string output = "There were warnings on " + std::to_string(warning_2) + " processors\n";
+
+        std::string binary_warning = std::bitset<5>(warning_1).to_string();
+
+        int sum = 0;
+        for (int i = 0; i < 5; i++)
         {
-        case 1:
-            return "Index (in IRN or JCN) out of range. Action taken by subroutine is to ignore any such entries and continue. " +
-                    "The number of faulty entries is: " + std::to_string(warning_2);
-        case 2:
-            return "During error analysis the max-norm of the computed solution is close to zero. " +
-                    "In some cases, this could cause difficulties in the computation of RINFOG(6)";
-        case 4:
-            return "ICNTL(49)=1,2 and not enough memory to compact S at the end of the factorization";
-        case 8:
-            return "Warning return from the iterative refinement routine. More than ICNTL(10) iterations are required";
-        case 16:
-            return "Warning return from rank-revealing feature (ICNTL(56)). " +
-                    "The values of the inertia (INFOG(12)) and/or the determinant (ICNTL(33)) might not be consistent with the number of singularities";
-            
+            sum += binary_warning[i] - '0';
         }
-    }
-}; // namespace Eigen
+
+        output+= "There were " + sum + " different warnings:\n";
+
+        if(binary_warning[4] == '1')
+            output += "Index (in IRN or JCN) out of range. Action taken by subroutine is to ignore any such entries and continue\n";
+        if(binary_warning[3] == '1')
+            output += "During error analysis the max-norm of the computed solution is close to zero. " +
+                    "In some cases, this could cause difficulties in the computation of RINFOG(6)\n";
+        if(binary_warning[2] == '1')
+            output += "ICNTL(49)=1,2 and not enough memory to compact S at the end of the factorization\n";
+        if(binary_warning[1] == '1')
+            output += "Warning return from the iterative refinement routine. More than ICNTL(10) iterations are required\n";
+        if(binary_warning[0] == '1')
+            output += "Warning return from rank-revealing feature (ICNTL(56)). " +
+                    "The values of the inertia (INFOG(12)) and/or the determinant (ICNTL(33)) might not be consistent with the number of singularities\n";
+        
+        return output;
+        }
+
+    };
+// }; // namespace Eigen
 
 #endif // __MUMPS_H__
 

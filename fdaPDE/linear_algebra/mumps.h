@@ -546,9 +546,8 @@ public:
             this->mumps_.schur_lld = schur_size_;
             this->mumps_.schur = schur_buff_.data();
         }
-        std::cout << "Check 1" << std::endl;
+        
         this->compute(matrix);
-        std::cout << "Check 2" << std::endl;
     }
 
     // SCHUR COMPLEMENT COMPUTATION METHODS

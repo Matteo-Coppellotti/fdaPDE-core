@@ -116,7 +116,6 @@ public:
     // GENERAL SOLVE METHOD
     template <isVector V>
     V solve(const V &rhs) {
-        //fdapde_assert(rhs.size() == n_);
         eigen_assert(matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling solve(rhs)");
         eigen_assert(rhs.size() == n_ && "The size of the right-hand side vector must match the size of the matrix");
 
@@ -280,7 +279,7 @@ protected:
 
 // MUMPS LU SOLVER
 template <isEigenSparseMatrix MatrixType_>
-class MumpsLU : public MumpsBase< MatrixType_> {
+class MumpsLU : public MumpsBase<MatrixType_> {
 
     using Scalar = typename MatrixType_::Scalar;
 
@@ -291,7 +290,7 @@ public:
     explicit MumpsLU(MPI_Comm comm): MumpsLU(comm, 0) {}
     explicit MumpsLU(int flags): MumpsLU(MPI_COMM_WORLD, flags) {}
     
-    MumpsLU(MPI_Comm comm, int flags): MumpsBase<Matrixtype_>(comm, flags) {
+    MumpsLU(MPI_Comm comm, int flags): MumpsBase<MatrixType_>(comm, flags) {
         // initialize MUMPS
         this->mumps_.par = 0;
         this->mumps_.sym = 0;
@@ -496,67 +495,69 @@ public:
 };
 
 
-// // CLASS FOR COMPUTING THE SHUR COMPLEMENT
-// template <isEigenSparseMatrix  MatrixType_>
-// class MumpsSchurComplement : public MumpsBase< MatrixType_> {
+// CLASS FOR COMPUTING THE SHUR COMPLEMENT
+template <isEigenSparseMatrix  MatrixType_>
+class MumpsSchurComplement : public MumpsBase< MatrixType_> {
 
-//     using Scalar = typename MatrixType_::Scalar;
+    using Scalar = typename MatrixType_::Scalar;
 
-//     using MumpsBase<MatrixType_>::mumps_;
-//     using MumpsBase<MatrixType_>::JOB_INIT;
-//     using MumpsBase<MatrixType_>::JOB_END;
+protected:
+    int schur_size_;
+    std::vector<int> schur_indices_;
+    std::vector<Scalar> schur_buff_;
+    using MumpsBase<MatrixType_>::compute; // redefining base class method as private to prevent the user from accessing this version of compute
 
-// protected:
-//     int schur_size_;
-//     std::vector<Scalar> schur_buff_;
-//     using MumpsBase<MatrixType_> :: compute; // redefining base class method as private to prevent the user from accessing this version of compute
+public:
 
-// public:
+    // CONSTRUCTOR
+    MumpsSchurComplement() : MumpsSchurComplement(MPI_COMM_WORLD) {}
+    explicit MumpsSchurComplement(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
+        this->mumps_.par = 0;
+        this->mumps_.sym = 0;
+        this->mumps_execute(this->JOB_INIT); // initialize MUMPS
 
-//     // CONSTRUCTOR
-//     MumpsSchurComplement() : MumpsSchurComplement(MPI_COMM_WORLD) {}
-//     explicit MumpsSchurComplement(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
-//         mumps_.par = 0;
-//         mumps_.sym = 0;
-//         mumps_execute(JOB_INIT); // initialize MUMPS
+        this->ICNTL(19) = 3; // 3: distributed by columns (changing parameters to cenralize it)
+        this->mumps_.nprow = this->mumps_.npcol = 1;
+        this->mumps_.mblock = this->mumps_.nblock = 100;
+    }
 
-//         ICNTL(19) = 3; // 3: distributed by columns (changing parameters to cenralize it)
-//         mumps_.nprow = mumps_.npcol = 1;
-//         mumps_.mblock = mumps_.nblock = 100;
-//     }
+    // DESTRUCTOR
+    ~MumpsSchurComplement() override {
+        this->mumps_execute(this->JOB_END); // finalize MUMPS
+    }
 
-//     // DESTRUCTOR
-//     ~MumpsSchurComplement() override {
-//         mumps_execute(JOB_END); // finalize MUMPS
-//     }
-
-//     void compute (const MatrixType_ &matrix, int schur_size) {
+    void compute (const MatrixType_ &matrix, int schur_size, const std::vector<int> &schur_indices) { // Assuiming 0-based indexing for the Schur indices
         
-//         eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
-//         eigen_assert(schur_size < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
+        eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
+        eigen_assert(schur_size < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
+        eigen_assert(schur_indices.size() == schur_size && "The Schur indices must have the same size as the Schur complement size");
+        eigen_assert(std::is_sorted(schur_indices.begin(), schur_indices.end()) && "The Schur indices must be sorted in ascending order");
+        eigen_assert(std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() && "The Schur indices must be unique");
+        eigen_assert(schur_indices.front() >= 0 && schur_indices.back() < matrix.rows() && "The Schur indices must be within the matrix size");
 
-//         schur_size_ = schur_size;
+        schur_size_ = schur_size;
+        schur_indices_ = this->mumps_index_scaling(schur_indices.data(), schur_indices.data() + schur_size_);
+        schur_buff_.resize(schur_size_ * schur_size_);
 
-//         schur_buff.resize(schur_size_ * schur_size_)
+        this->mumps_.size_schur = schur_size_;
+        this->mumps_.listvar_schur = schur_indices_.data();
 
-//         mumps_.size_schur = schur_size_;
-//         mumps_.listvar_schur = // ???????????????????????????
+        if (this->rank_ == (this->mumps_.par + 1)%2) { // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
+            this->mumps_.schur_lld = schur_size_;
+            this->mumps_.schur = schur_buff_.data();
+        }
+        std::cout << "Check 1" << std::endl;
+        this->compute(matrix);
+        std::cout << "Check 2" << std::endl;
+    }
 
-//         if (rank_ == (mumps_.par + 1)%2) { // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
-//             mumps_.schur_lld = schur_size;
-//             mumps_.schur = schur_buff.data();
-//         }
-
-//         compute(matrix)
-//     }
-
-//     // SCHUR COMPLEMENT COMPUTATION METHODS
-//     MatrixXd complement() {
-//         eigen_assert(matrix_computed_ && "The matrix must be computed with compute(Matrix, schur_size) before calling complement()");
-//         MPI_Bcast(schur_buff.data(), schur_buff.size(), MPI_DOUBLE, (mumps_.par + 1)%2, comm_);
-//         return Map<MatrixXd>(buff.data(), schur_size_, schur_size_);
-//     }
-// };
+    // SCHUR COMPLEMENT COMPUTATION METHODS
+    MatrixXd complement() {
+        eigen_assert(this->matrix_computed_ && "The matrix must be computed with compute(Matrix, schur_size, schur_indices) before calling complement()");
+        MPI_Bcast(schur_buff_.data(), schur_buff_.size(), MPI_DOUBLE, (this->mumps_.par + 1)%2, this->comm_);
+        return Map<MatrixXd>(schur_buff_.data(), schur_size_, schur_size_);
+    }
+};
 
 } // namespace mumps
 

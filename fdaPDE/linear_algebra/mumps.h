@@ -14,6 +14,28 @@
 using namespace Eigen;
 using namespace internal;
 
+namespace fdapde {
+
+namespace mumps {
+
+// MUMPS FLAGS
+
+// Base class flags
+// determinant computation
+static constexpr int DETERMINANT = (1 << 0); // default
+static constexpr int NO_DETERMINANT = (1 << 1);
+// verbose output
+static constexpr int VERBOSE = (1 << 2); // default
+static constexpr int NON_VERBOSE = (1 << 3);
+
+// BLR flags
+// BLR factorization variant
+static constexpr int UFSC = (1 << 4); // default
+static constexpr int UCFS = (1 << 5);
+// compression of the contribution blocks (CB)
+static constexpr int UNCOMPRESSED_CB = (1 << 6); // default 
+static constexpr int COMPRESSED_CB = (1 << 7);
+
 
 // CONCEPTS
 template <typename T>
@@ -120,20 +142,6 @@ public:
         return RINFOG(12) * pow(2, INFOG(34));
     }
 
-    // TOGGLE MUMPS MESSAGES
-    // CHECK IF THE FORTRAN OUTPUT IS REDIRECTED TO THE C++ OUTPUT -----!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    void toggle_mumps_messages() { // off by default
-        verbose_ = !verbose_;
-        if (rank_ == 0) std::cout << "MUMPS messages are now " << (verbose_ ? "ON" : "OFF") << std::endl;
-    }
-
-    // TOGGLE DETERMINANT COMPUTATION
-    void toggle_determinant_computation() { // on by default
-        compute_determinant_ = !compute_determinant_;
-        if (rank_ == 0) std::cout << "Determinant computation is now " << (compute_determinant_ ? "ON" : "OFF") << std::endl;
-    }
-
-
 protected:
 
     static constexpr int JOB_INIT = -1;
@@ -155,14 +163,27 @@ protected:
     int rank_;
 
     // flags
-    bool verbose_ = false;
+    bool verbose_;
+    bool compute_determinant_;
+
+    // computation flags
     bool matrix_computed_ = false;
-    bool compute_determinant_ = true;
     bool determinant_computed_ = false;
 
     // CONSTRUCTORS --> protected to prevent instantiation of the base class
-    MumpsBase(): MumpsBase(MPI_COMM_WORLD) {}
-    explicit MumpsBase(MPI_Comm comm) : comm_(comm) {
+
+    // ARE THESE EVEN NEEDED ?? -> could probably do with just the comprehensive constructor if kept as protected
+    MumpsBase(): MumpsBase(MPI_COMM_WORLD, 0) {} // should I instead put DETERMINANT | NON_VERBOSE for readability?
+    explicit MumpsBase(MPI_Comm comm): MumpsBase(comm, 0) {}
+    explicit MumpsBase(int flags): MumpsBase(MPI_COMM_WORLD, flags) {}
+
+    MumpsBase(MPI_Comm comm, int flags): comm_(comm) {
+        eigen_assert(!((flags & VERBOSE) && (flags & NON_VERBOSE)) && "VERBOSE and NO_VERBOSE cannot be set at the same time");
+        eigen_assert(!((flags & DETERMINANT) && (flags & NO_DETERMINANT)) && "DETERMINANT and NO_DETERMINANT cannot be set at the same time");
+
+        verbose_ = (flags & VERBOSE) ? true : false; // default is non verbose
+        compute_determinant_ = !(flags & NO_DETERMINANT) ? true : false; // default is to compute the determinant
+
         // if MPI isn't initialized, initialize it
         MPI_Initialized(&mpi_initialized_);  // --> CONSDER ADDING mpi_err = AT THE START OF ALL THE MPI CALLS TO CHECK FOR ERRORS
         if (!mpi_initialized_) {
@@ -265,9 +286,12 @@ class MumpsLU : public MumpsBase< MatrixType_> {
 
 public:
 
-    // CONSTRUCTOR
-    MumpsLU() : MumpsLU(MPI_COMM_WORLD) {}
-    explicit MumpsLU(MPI_Comm comm): MumpsBase<MatrixType_>(comm) {
+    // CONSTRUCTORS
+    MumpsLU(): MumpsLU(MPI_COMM_WORLD, 0) {}
+    explicit MumpsLU(MPI_Comm comm): MumpsLU(comm, 0) {}
+    explicit MumpsLU(int flags): MumpsLU(MPI_COMM_WORLD, flags) {}
+    
+    MumpsLU(MPI_Comm comm, int flags): MumpsBase<Matrixtype_>(comm, flags) {
         // initialize MUMPS
         this->mumps_.par = 0;
         this->mumps_.sym = 0;
@@ -291,9 +315,11 @@ class MumpsLDLT : public MumpsBase< MatrixType_> {
 
 public:
 
-    // CONSTUCTOR
+    // CONSTUCTORS
     MumpsLDLT(): MumpsLDLT(MPI_COMM_WORLD) {}
-    explicit MumpsLDLT(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
+    explicit MumpsLDLT(MPI_Comm comm): MumpsLDLT(comm, 0) {}
+    explicit MumpsLDLT(int flags): MumpsLDLT(MPI_COMM_WORLD, flags) {}
+    MumpsLDLT(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
         // initialize MUMPS
         this->mumps_.par = 0;
         this->mumps_.sym = 1; // -> symmetric and positive definite
@@ -342,14 +368,6 @@ protected:
 
 // MUMPS BLR SOLVER
 
-// BLR factorization variant
-static constexpr int UFSC = (1 << 0); // default
-static constexpr int UCFS = (1 << 1);
-
-// compression of the contribution blocks (CB)
-static constexpr int uncompressed_CB = (1 << 2); // default 
-static constexpr int compressed_CB = (1 << 3);
-
 //USAGE: flags = [UFSC | UCFS] | [uncompressed_CB | compressed_CB] ---- (flags can be omitted and default will be used)
 
 // estimated compression rate of LU factors
@@ -370,27 +388,32 @@ class MumpsBLR : public MumpsBase< MatrixType_>
 
 public:
 
-    // CONSTRUCTOR
-    MumpsBLR(): MumpsBLR(MPI_COMM_WORLD) {}
-    explicit MumpsBLR(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
+    // CONSTRUCTORS
+    MumpsBLR(): MumpsBLR(MPI_COMM_WORLD, 0, 0) {}
+    explicit MumpsBLR(MPI_Comm comm): MumpsBLR(comm, 0, 0) {}
+    explicit MumpsBLR(int flags): MumpsBLR(MPI_COMM_WORLD, flags, 0) {}
+    // explicit MumpsBLR(double dropping_parameter): MumpsBLR(MPI_COMM_WORLD, 0, dropping_parameter) {} --> do i want to allow this????
+    MumpsBLR(MPI_Comm comm, int flags): MumpsBLR(comm, flags, 0) {}
+    MumpsBLR(int flags, double dropping_parameter): MumpsBLR(MPI_COMM_WORLD, flags, dropping_parameter) {}
+    // MumpsBLR(MPI_Comm comm, double dropping_parameter): MumpsBLR(comm, 0, dropping_parameter) {} --> do i want to allow this????
+
+    MumpsBLR(MPI_Comm comm, int flags, double dropping_parameter): MumpsBase< MatrixType_>(comm, flags) {
+
+        eigen_assert(!(flags & UFSC && flags & UCFS) && "UFSC and UCFS cannot be set at the same time");
+        eigen_assert(!(flags & UNCOMPRESSED_CB && flags & COMPRESSED_CB) && "uncompressed_CB and compressed_CB cannot be set at the same time");
+
         // initialize MUMPS
         this->mumps_.par = 0;
         this->mumps_.sym = 0;
         this->mumps_execute(this->JOB_INIT);
 
-        // activate the BLR feature
+        // activate the BLR feature & set the BLR parameters
         this->ICNTL(35) = 1; // 1: automatic choice of the BLR memory management strategy
-    }
-    MumpsBLR(MPI_Comm comm, int flags) : MumpsBLR(comm) {
-        eigen_assert(!(flags & UFSC && flags & UCFS) && "UFSC and UCFS cannot be set at the same time");
-        eigen_assert(!(flags & uncompressed_CB && flags & compressed_CB) && "uncompressed_CB and compressed_CB cannot be set at the same time");
         this->ICNTL(36) = flags & UCFS; // set ICNTL(36) = 1 if UCFS is set, otherwise it remains 0 (default -> UFSC)
-        this->ICNTL(37) = flags & compressed_CB; // set ICNTL(37) = 1 if compressed_CB is set, otherwise it remains 0 (default -> uncompressed_CB)
+        this->ICNTL(37) = flags & UNCOMPRESSED_CB; // set ICNTL(37) = 1 if compressed_CB is set, otherwise it remains 0 (default -> uncompressed_CB)
+        this->CNTL(7) = dropping_parameter; // set the dropping parameter
     }
-    MumpsBLR(MPI_Comm comm, int flags, double dropping_parameter) : MumpsBLR(comm, flags) {
-        eigen_assert(dropping_parameter >= 0.0 && "The dropping parameter must be non-negative");
-        this->CNTL(7) = dropping_parameter;
-    }
+
 
     // DESTRUCTOR
     ~MumpsBLR() override {
@@ -410,8 +433,11 @@ class MumpsRankRevealing : public MumpsBase< MatrixType_> {
 public:
 
     // CONSTRUCTOR
-    MumpsRankRevealing(): MumpsRankRevealing(MPI_COMM_WORLD) {}
-    explicit MumpsRankRevealing(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
+    MumpsRankRevealing(): MumpsRankRevealing(MPI_COMM_WORLD, 0) {}
+    explicit MumpsRankRevealing(MPI_Comm comm): MumpsRankRevealing(comm, 0) {}
+    explicit MumpsRankRevealing(int flags): MumpsRankRevealing(MPI_COMM_WORLD, flags) {}
+
+    MumpsRankRevealing(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
         // initialize MUMPS
         this->mumps_.par = 0;
         this->mumps_.sym = 0;
@@ -531,5 +557,9 @@ public:
 //         return Map<MatrixXd>(buff.data(), schur_size_, schur_size_);
 //     }
 // };
+
+} // namespace mumps
+
+} // namespace fdapde
 
 #endif // __MUMPS_H__

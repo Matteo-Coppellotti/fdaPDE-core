@@ -27,14 +27,17 @@ static constexpr int NO_DETERMINANT = (1 << 1);
 // verbose output
 static constexpr int VERBOSE = (1 << 2); // default
 static constexpr int NON_VERBOSE = (1 << 3);
+// host process
+static constexpr int DELEGATING_HOST = (1 << 4); // default
+static constexpr int WORKING_HOST = (1 << 5);
 
 // BLR flags
 // BLR factorization variant
-static constexpr int UFSC = (1 << 4); // default
-static constexpr int UCFS = (1 << 5);
+static constexpr int UFSC = (1 << 6); // default
+static constexpr int UCFS = (1 << 7);
 // compression of the contribution blocks (CB)
-static constexpr int UNCOMPRESSED_CB = (1 << 6); // default 
-static constexpr int COMPRESSED_CB = (1 << 7);
+static constexpr int UNCOMPRESSED_CB = (1 << 8); // default 
+static constexpr int COMPRESSED_CB = (1 << 9);
 
 
 // CONCEPTS
@@ -67,7 +70,7 @@ class MumpsSchurComplement;
 
 
 // MUMPS BASE CLASS
-template <isEigenSparseMatrix MatrixType_> //--> CRTP???? (with this as base class) ---> concept ????
+template <isEigenSparseMatrix MatrixType_> //--> CRTP???? (with this as base class)
 class MumpsBase {
 
     using Scalar = typename MatrixType_::Scalar;
@@ -172,16 +175,18 @@ protected:
     // CONSTRUCTORS --> protected to prevent instantiation of the base class
 
     // ARE THESE EVEN NEEDED ?? -> could probably do with just the comprehensive constructor if kept as protected
-    MumpsBase(): MumpsBase(MPI_COMM_WORLD, 0) {} // should I instead put DETERMINANT | NON_VERBOSE for readability?
+    MumpsBase(): MumpsBase(MPI_COMM_WORLD, 0) {} // should I instead put DETERMINANT | NON_VERBOSE | DELEGATING_HOST for readability?
     explicit MumpsBase(MPI_Comm comm): MumpsBase(comm, 0) {}
     explicit MumpsBase(int flags): MumpsBase(MPI_COMM_WORLD, flags) {}
 
     MumpsBase(MPI_Comm comm, int flags): comm_(comm) {
         eigen_assert(!((flags & VERBOSE) && (flags & NON_VERBOSE)) && "VERBOSE and NO_VERBOSE cannot be set at the same time");
         eigen_assert(!((flags & DETERMINANT) && (flags & NO_DETERMINANT)) && "DETERMINANT and NO_DETERMINANT cannot be set at the same time");
+        eigen_assert(!((flags & DELEGATING_HOST) && (flags & WORKING_HOST)) && "DELEGATING_HOST and WORKING_HOST cannot be set at the same time");
 
         verbose_ = (flags & VERBOSE) ? true : false; // default is non verbose
         compute_determinant_ = !(flags & NO_DETERMINANT) ? true : false; // default is to compute the determinant
+        mumps_.par = flags & WORKING_HOST; // default is delegating host (par = 0)
 
         // if MPI isn't initialized, initialize it
         MPI_Initialized(&mpi_initialized_);  // --> CONSDER ADDING mpi_err = AT THE START OF ALL THE MPI CALLS TO CHECK FOR ERRORS
@@ -292,7 +297,6 @@ public:
     
     MumpsLU(MPI_Comm comm, int flags): MumpsBase<MatrixType_>(comm, flags) {
         // initialize MUMPS
-        this->mumps_.par = 0;
         this->mumps_.sym = 0;
         this->mumps_execute(this->JOB_INIT);
     }
@@ -320,7 +324,6 @@ public:
     explicit MumpsLDLT(int flags): MumpsLDLT(MPI_COMM_WORLD, flags) {}
     MumpsLDLT(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
         // initialize MUMPS
-        this->mumps_.par = 0;
         this->mumps_.sym = 1; // -> symmetric and positive definite
         this->mumps_execute(this->JOB_INIT);
     }
@@ -367,15 +370,15 @@ protected:
 
 // MUMPS BLR SOLVER
 
-//USAGE: flags = [UFSC | UCFS] | [uncompressed_CB | compressed_CB] ---- (flags can be omitted and default will be used)
+// USAGE: flags = [UFSC | UCFS] | [uncompressed_CB | compressed_CB] ---- (flags can be omitted and default will be used)
 
 // estimated compression rate of LU factors
-//ICNTL(38) = ... 
+// ICNTL(38) = ... 
 // between 0 and 1000 (default: 600)
 // ICNTL(38)/10 is a percentage representing the typical compression of the compressed factors factor matrices in BLR fronts
 
 // estimated compression rate of contribution blocks
-//ICNTL(39) = ...
+// ICNTL(39) = ...
 // between 0 and 1000 (default: 500)
 // ICNTL(39)/10 is a percentage representing the typical compression of the compressed CB CB in BLR fronts
 
@@ -402,7 +405,6 @@ public:
         eigen_assert(!(flags & UNCOMPRESSED_CB && flags & COMPRESSED_CB) && "uncompressed_CB and compressed_CB cannot be set at the same time");
 
         // initialize MUMPS
-        this->mumps_.par = 0;
         this->mumps_.sym = 0;
         this->mumps_execute(this->JOB_INIT);
 
@@ -438,7 +440,6 @@ public:
 
     MumpsRankRevealing(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
         // initialize MUMPS
-        this->mumps_.par = 0;
         this->mumps_.sym = 0;
         this->mumps_execute(this->JOB_INIT);
 
@@ -512,7 +513,6 @@ public:
     // CONSTRUCTOR
     MumpsSchurComplement() : MumpsSchurComplement(MPI_COMM_WORLD) {}
     explicit MumpsSchurComplement(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
-        this->mumps_.par = 0;
         this->mumps_.sym = 0;
         this->mumps_execute(this->JOB_INIT); // initialize MUMPS
 

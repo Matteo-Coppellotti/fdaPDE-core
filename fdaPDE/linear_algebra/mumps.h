@@ -1,565 +1,862 @@
 #ifndef __MUMPS_H__
 #define __MUMPS_H__
 
+#include <Mumps/dmumps_c.h>
+#include <mpi.h>
+
 #include <Eigen/Sparse>
-#include <vector>
 #include <algorithm>
 #include <iostream>
 #include <string>
-#include <concepts>
+#include <vector>
 
-#include <mpi.h>
-#include <Mumps/dmumps_c.h>
+#include "../utils/assert.h"
 
 using namespace Eigen;
-using namespace internal;
 
 namespace fdapde {
 
 namespace mumps {
 
+// concepts
+template <typename T>
+concept isEigenSparseMatrix = std::derived_from<T, SparseMatrixBase<T>>;
+template <typename T>
+concept isEigenDenseMatrix = std::derived_from<T, MatrixBase<T>>;
+
+class MPI_Manager {   // SINGLETON CLASS
+   public:
+    static MPI_Manager& getInstance() {
+        static MPI_Manager instance;   // Initialized once
+        return instance;
+    }
+
+    // Delete copy and move constructors and assignment operators
+    MPI_Manager(const MPI_Manager&) = delete;
+    MPI_Manager& operator=(const MPI_Manager&) = delete;
+    MPI_Manager(MPI_Manager&&) = delete;
+    MPI_Manager& operator=(MPI_Manager&&) = delete;
+
+    // Public method to check MPI state, could be useful
+    bool isMPIinitialized() const { return mpi_initialized; }
+   private:
+    bool mpi_initialized;
+
+    // Private constructor initializes MPI
+    MPI_Manager() : mpi_initialized(false) {
+        int initialized;
+        MPI_Initialized(&initialized);
+        if (!initialized) {
+            MPI_Init(NULL, NULL);
+            mpi_initialized = true;
+        }
+    }
+
+    // Private destructor finalizes MPI
+    ~MPI_Manager() {
+        int finalized;
+        MPI_Finalized(&finalized);
+        if (!finalized && mpi_initialized) { MPI_Finalize(); }
+    }
+};
+
+template <typename T, int Size> class MumpsParameterArray {
+   public:
+    MumpsParameterArray() : mp_data(nullptr) { }
+    MumpsParameterArray(T* data_ptr) : mp_data(data_ptr) { }
+
+    inline T* data() { return mp_data; }
+    inline const T* data() const { return mp_data; }
+    inline size_t size() const { return Size; }
+
+    inline T& operator[](size_t i) {
+        fdapde_assert(i >= 0 && "Index must be positive");
+        fdapde_assert(i < Size && "Index out of bounds");
+        return mp_data[i];
+    }
+
+    inline const T& operator[](size_t i) const {
+        fdapde_assert(i >= 0 && "Index must be positive");
+        fdapde_assert(i < Size && "Index out of bounds");
+        return mp_data[i];
+    }
+   protected:
+    T* mp_data;
+};
+
 // MUMPS FLAGS
 
 // Base class flags
-// determinant computation
-static constexpr int DETERMINANT = (1 << 0); // default
-static constexpr int NO_DETERMINANT = (1 << 1);
-// verbose output
-static constexpr int VERBOSE = (1 << 2); // default
-static constexpr int NON_VERBOSE = (1 << 3);
-// host process
-static constexpr int DELEGATING_HOST = (1 << 4); // default
-static constexpr int WORKING_HOST = (1 << 5);
+constexpr unsigned int NoDeterminant = (1 << 0);
+constexpr unsigned int Verbose = (1 << 1);
+constexpr unsigned int WorkingHost = (1 << 2);
 
 // BLR flags
-// BLR factorization variant
-static constexpr int UFSC = (1 << 6); // default
-static constexpr int UCFS = (1 << 7);
-// compression of the contribution blocks (CB)
-static constexpr int UNCOMPRESSED_CB = (1 << 8); // default 
-static constexpr int COMPRESSED_CB = (1 << 9);
-
-
-// CONCEPTS
-template <typename T>
-concept isEigenSparseMatrix = std::derived_from<T, SparseMatrixBase<T>>;
-
-template <typename T>
-concept isVector = requires(T t) {
-    { t.size() }
-    ->std::convertible_to<int>;
-    { t.data() }
-    ->std::convertible_to<double *>;
-};
-
-template <typename T>
-concept isScalar = std::is_arithmetic<T>::value;
-
+constexpr unsigned int UFSC = (1 << 3);   // default
+constexpr unsigned int UCFS = (1 << 4);
+constexpr unsigned int Compressed = (1 << 5);
 
 // FORWARD DECLARATIONS
-template <isEigenSparseMatrix MatrixType_>
-class MumpsLU;
-template <isEigenSparseMatrix MatrixType_, int Options = Upper>
-class MumpsLDLT;
-template <isEigenSparseMatrix MatrixType_>
-class MumpsBLR;
-template <isEigenSparseMatrix MatrixType_>
-class MumpsRankRevealing;
-template <isEigenSparseMatrix MatrixType_>
-class MumpsSchurComplement;
+template <isEigenSparseMatrix MatrixType_> class MumpsLU;
+template <isEigenSparseMatrix MatrixType_, int Options = Upper> class MumpsLDLT;
+template <isEigenSparseMatrix MatrixType_> class MumpsBLR;
+template <isEigenSparseMatrix MatrixType_> class MumpsRR;
+template <isEigenSparseMatrix MatrixType_> class MumpsSchur;
 
+namespace internal {
+
+template <class Derived> struct mumps_traits;
+
+template <isEigenSparseMatrix MatrixType_> struct mumps_traits<MumpsLU<MatrixType_>> {
+    using MatrixType = MatrixType_;
+    using Scalar = typename MatrixType_::Scalar;
+    using RealScalar = typename MatrixType_::RealScalar;
+    using StorageIndex = typename MatrixType_::StorageIndex;
+};
+
+template <isEigenSparseMatrix MatrixType_> struct mumps_traits<MumpsLDLT<MatrixType_>> {
+    using MatrixType = MatrixType_;
+    using Scalar = typename MatrixType_::Scalar;
+    using RealScalar = typename MatrixType_::RealScalar;
+    using StorageIndex = typename MatrixType_::StorageIndex;
+};
+
+template <isEigenSparseMatrix MatrixType_> struct mumps_traits<MumpsBLR<MatrixType_>> {
+    using MatrixType = MatrixType_;
+    using Scalar = typename MatrixType_::Scalar;
+    using RealScalar = typename MatrixType_::RealScalar;
+    using StorageIndex = typename MatrixType_::StorageIndex;
+};
+
+template <isEigenSparseMatrix MatrixType_> struct mumps_traits<MumpsRR<MatrixType_>> {
+    using MatrixType = MatrixType_;
+    using Scalar = typename MatrixType_::Scalar;
+    using RealScalar = typename MatrixType_::RealScalar;
+    using StorageIndex = typename MatrixType_::StorageIndex;
+};
+
+template <isEigenSparseMatrix MatrixType_> struct mumps_traits<MumpsSchur<MatrixType_>> {
+    using MatrixType = MatrixType_;
+    using Scalar = typename MatrixType_::Scalar;
+    using RealScalar = typename MatrixType_::RealScalar;
+    using StorageIndex = typename MatrixType_::StorageIndex;
+};
+
+}   // namespace internal
 
 // MUMPS BASE CLASS
-template <isEigenSparseMatrix MatrixType_> //--> CRTP???? (with this as base class)
-class MumpsBase {
+template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
+   protected:
+    using Base = SparseSolverBase<Derived>;
+    using Base::derived;
+    using Base::m_isInitialized;
 
-    using Scalar = typename MatrixType_::Scalar;
-    using StorageIndex = typename MatrixType_::StorageIndex;
+    using Traits = internal::mumps_traits<Derived>;
+   public:
+    using Base::_solve_impl;
 
-public:
+    using MatrixType = typename Traits::MatrixType;
+    using Scalar = typename Traits::Scalar;
+    using RealScalar = typename Traits::RealScalar;
+    using StorageIndex = typename Traits::StorageIndex;
+    using MumpsIcntlArray = MumpsParameterArray<int, 60>;
+    using MumpsCntlArray = MumpsParameterArray<double, 15>;
+    using MumpsInfoArray = MumpsParameterArray<int, 80>;
+    using MumpsRinfoArray = MumpsParameterArray<double, 40>;
+    enum {
+        ColsAtCompileTime = MatrixType::ColsAtCompileTime,
+        MaxColsAtCompileTime = MatrixType::MaxColsAtCompileTime
+    };
 
-    // SETTERS AND GETTERS WITH SCALED INDEXES S.T. IT REFLECTS THE MUMPS DOCUMENTATION
+    inline Index cols() const { return m_size; }
+    inline Index rows() const { return m_size; }
 
-    // SETTERS
-    inline int& ICNTL(int index) { return mumps_.icntl[index - 1]; }
-    inline double& CNTL(int index) { return mumps_.cntl[index - 1]; }
+    inline int getProcessRank() const { return m_mpiRank; }
+    inline int getProcessSize() const { return m_mpiSize; }
 
-    // GETTERS
-    inline int ICNTL(int index) const { return mumps_.icntl[index - 1]; }
-    inline double CNTL(int index) const { return mumps_.cntl[index - 1]; }
-    inline int INFO(int index) const { return mumps_.info[index - 1]; }
-    inline double RINFO(int index) const { return mumps_.rinfo[index - 1]; }
-    inline int INFOG(int index) const { return mumps_.infog[index - 1]; }
-    inline double RINFOG(int index) const { return mumps_.rinfog[index - 1]; }
+    inline MumpsIcntlArray& mumpsIcntl() { return m_mumpsIcntl; }
+    inline MumpsCntlArray& mumpsCntl() { return m_mumpsCntl; }
 
+    inline const MumpsIcntlArray& mumpsIcntl() const { return m_mumpsIcntl; }
+    inline const MumpsCntlArray& mumpsCntl() const { return m_mumpsCntl; }
+    inline const MumpsInfoArray& mumpsInfo() const { return m_mumpsInfo; }
+    inline const MumpsInfoArray& mumpsInfog() const { return m_mumpsInfog; }
+    inline const MumpsRinfoArray& mumpsRinfo() const { return m_mumpsRinfo; }
+    inline const MumpsRinfoArray& mumpsRinfog() const { return m_mumpsRinfog; }
 
-    // COMPUTE METHOD
-    void compute(const MatrixType_ &matrix) {
+    // setter & getter for the raw mumps struct, tinkering with it is unadvides unless the user has an already good
+    // understanding of mumps and this wrapper
+    inline DMUMPS_STRUC_C& mumpsRawStruct() { return m_mumps; }
+    inline const DMUMPS_STRUC_C& mumpsRawStruct() const { return m_mumps; }
 
-        ICNTL(1) = (verbose_) ? 6 : -1; // 6: verbose output, -1: no output
-        ICNTL(2) = (verbose_) ? 6 : -1; // 6: verbose output, -1: no output
-        ICNTL(3) = (verbose_) ? 6 : -1; // 6: verbose output, -1: no output
-        ICNTL(4) = (verbose_) ? 4 : 0; // 4: verbose output, 0: no output
-
-        eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
-
+    Derived& analyzePattern(const MatrixType& matrix) {
         define_matrix(matrix);
-
-        mumps_execute(1); // 1: analyze
-
-        ICNTL(33) = (compute_determinant_) ? 1 : 0; // 1: compute determinant, 0: do not compute determinant
-
-        mumps_execute(2); // 2: factorize
-
-        determinant_computed_ = compute_determinant_;
-
-        matrix_computed_ = true;
+        analyzePattern_impl();
+        return derived();
     }
 
-    // GENERAL SOLVE METHOD
-    template <isVector V>
-    V solve(const V &rhs) {
-        eigen_assert(matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling solve(rhs)");
-        eigen_assert(rhs.size() == n_ && "The size of the right-hand side vector must match the size of the matrix");
+    Derived& factorize(const MatrixType& matrix) {
+        define_matrix(matrix);
+        factorize_impl();
+        return derived();
+    }
 
-        V buff = rhs;
+    Derived& compute(const MatrixType& matrix) {
+        define_matrix(matrix);
+        compute_impl();
+        return derived();
+    }
 
-        // defining the problem on the host
-        if (rank_ == 0) {
-            mumps_.rhs = const_cast<Scalar *>(buff.data());
+    template <typename BDerived, typename XDerived>
+        requires isEigenDenseMatrix<BDerived> && isEigenDenseMatrix<XDerived>
+    void _solve_impl(const MatrixBase<BDerived>& b, MatrixBase<XDerived>& x) const {
+        fdapde_assert(
+          m_factorizationIsOk && "The matrix must be factorized with factorize(matrix) before calling solve(rhs)");
+
+        if (b.derived().data() == x.derived().data()) {   // inplace solve
+            fdapde_assert((BDerived::Flags & RowMajorBit) == 0 && "Inplace solve doesn't support row-major rhs");
+            if (getProcessRank() == 0) {
+                m_mumps.nrhs = b.cols();
+                m_mumps.lrhs = b.rows();
+                m_mumps.rhs = const_cast<Scalar*>(b.derived().data());
+            }
+            mumps_execute(3);   // 3: solve
         }
 
-        mumps_execute(3); // 3: solve
+        else {
+            Matrix<Scalar, Dynamic, Dynamic, ColMajor> buff;   // mumps requires the rhs to be ColMajor
+            if (getProcessRank() == 0) {
+                buff = b;
+                m_mumps.nrhs = buff.cols();
+                m_mumps.lrhs = buff.rows();
+                m_mumps.rhs = const_cast<Scalar*>(buff.data());
+            }
+            mumps_execute(3);   // 3: solve
+            x.derived().resizeLike(b);
+            if (getProcessRank() == 0) { x.derived() = buff; }
+        }
 
-        MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, comm_);
-
-        return buff;
+        MPI_Bcast(x.derived().data(), x.size(), MPI_DOUBLE, 0, m_mpiComm);
     }
 
-    // DETERMINANT COMPUTATION METHOD
     Scalar determinant() {
-        eigen_assert(compute_determinant_ && "The determinant computation must be enabled");
-        eigen_assert(matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling determinant()");
-        eigen_assert(determinant_computed_ && "The determinant computation must be enabled before calling compute(Matrix)");
-        return RINFOG(12) * pow(2, INFOG(34));
+        fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
+        fdapde_assert(
+          m_factorizationIsOk && "The matrix must be factoried with factorize_impl() before calling determinant()");
+        if (mumpsInfog()[27] != 0) { return 0; }
+        return mumpsRinfog()[11] * std::pow(2, mumpsInfog()[33]);
     }
 
-protected:
+    ComputationInfo info() const {
+        fdapde_assert(m_isInitialized && "Decomposition is not initialized.");
+        return m_info;
+    }
+   protected:
+    MumpsBase(MPI_Comm comm, unsigned int flags) :
+        m_size(0),
+        m_mpiComm(comm),
+        m_info(InvalidInput),
+        m_matrixDefined(false),
+        m_analysisIsOk(false),
+        m_factorizationIsOk(false),
+        m_mumpsIcntl(m_mumps.icntl),
+        m_mumpsCntl(m_mumps.cntl),
+        m_mumpsInfo(m_mumps.info),
+        m_mumpsInfog(m_mumps.infog),
+        m_mumpsRinfo(m_mumps.rinfo),
+        m_mumpsRinfog(m_mumps.rinfog) {
+        m_verbose = (flags & Verbose) ? true : false;                     // default is non verbose
+        m_computeDeterminant = !(flags & NoDeterminant) ? true : false;   // default is to compute the determinant
+        m_mumps.par = (flags & WorkingHost) ? 1 : 0;                      // default is delegating host (par = 0)
 
-    static constexpr int JOB_INIT = -1;
-    static constexpr int JOB_END = -2;
+        MPI_Manager::getInstance();   // initialize MPI
 
-    static constexpr int StorageOrder = MatrixType_::IsRowMajor ? RowMajor : ColMajor;
+        MPI_Comm_rank(m_mpiComm, &m_mpiRank);
+        MPI_Comm_size(m_mpiComm, &m_mpiSize);
 
-    // mumps struct
-    DMUMPS_STRUC_C mumps_;
+        m_mumps.comm_fortran = (MUMPS_INT)MPI_Comm_c2f(m_mpiComm);
 
-    // matrix useful info (available on all processes, the mumps info for matrix and rhs should be available only on the host)
-    int n_;
-    std::vector<int> col_indices_;
-    std::vector<int> row_indices_;
-
-    // mpi
-    MPI_Comm comm_;
-    int mpi_initialized_;
-    int rank_;
-
-    // flags
-    bool verbose_;
-    bool compute_determinant_;
-
-    // computation flags
-    bool matrix_computed_ = false;
-    bool determinant_computed_ = false;
-
-    // CONSTRUCTORS --> protected to prevent instantiation of the base class
-
-    // ARE THESE EVEN NEEDED ?? -> could probably do with just the comprehensive constructor if kept as protected
-    MumpsBase(): MumpsBase(MPI_COMM_WORLD, 0) {} // should I instead put DETERMINANT | NON_VERBOSE | DELEGATING_HOST for readability?
-    explicit MumpsBase(MPI_Comm comm): MumpsBase(comm, 0) {}
-    explicit MumpsBase(int flags): MumpsBase(MPI_COMM_WORLD, flags) {}
-
-    MumpsBase(MPI_Comm comm, int flags): comm_(comm) {
-        eigen_assert(!((flags & VERBOSE) && (flags & NON_VERBOSE)) && "VERBOSE and NO_VERBOSE cannot be set at the same time");
-        eigen_assert(!((flags & DETERMINANT) && (flags & NO_DETERMINANT)) && "DETERMINANT and NO_DETERMINANT cannot be set at the same time");
-        eigen_assert(!((flags & DELEGATING_HOST) && (flags & WORKING_HOST)) && "DELEGATING_HOST and WORKING_HOST cannot be set at the same time");
-
-        verbose_ = (flags & VERBOSE) ? true : false; // default is non verbose
-        compute_determinant_ = !(flags & NO_DETERMINANT) ? true : false; // default is to compute the determinant
-        mumps_.par = flags & WORKING_HOST; // default is delegating host (par = 0)
-
-        // if MPI isn't initialized, initialize it
-        MPI_Initialized(&mpi_initialized_);  // --> CONSDER ADDING mpi_err = AT THE START OF ALL THE MPI CALLS TO CHECK FOR ERRORS
-        if (!mpi_initialized_) {
-            MPI_Init(NULL, NULL);
-        }
-
-        MPI_Comm_rank(comm_, &rank_);
-
-        mumps_.comm_fortran = (MUMPS_INT) MPI_Comm_c2f(comm_);
+        m_isInitialized = false;
     }
 
     // DESTRUCTOR
-    virtual ~MumpsBase() {
-        // if MPI was initialized by this class, finalize it
-        if (!mpi_initialized_) {
-            MPI_Finalize();
+    virtual ~MumpsBase() { }
+
+    virtual void define_matrix(const MatrixType& matrix) {
+        fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
+        fdapde_assert(matrix.rows() > 0 && "The matrix must be non-empty");
+
+        if (m_matrixDefined == true) {
+            int exit_code = 0;
+            if (getProcessRank() == 0) {
+                if (m_size == matrix.rows() && m_matrix.isApprox(matrix)) { exit_code = 1; }
+            }
+            MPI_Bcast(&exit_code, 1, MPI_INT, 0, m_mpiComm);
+            if (exit_code == 1) { return; }
         }
-    }
 
-    // INDEX SCALING FOR MUMPS (MUMPS uses 1-based indexing)
-    std::vector<int> mumps_index_scaling(const StorageIndex* begin, const StorageIndex* end) const {
-        std::vector<int> indices;
-        indices.reserve(end - begin);
-        std::copy(begin, end, std::back_inserter(indices));
-        std::for_each(indices.begin(), indices.end(), [](int &idx)
-                        { idx += 1; });
-        return indices;
-    }
+        m_matrixDefined = false;
+        m_isInitialized = false;
+        m_analysisIsOk = false;
+        m_factorizationIsOk = false;
 
-    // DEFINING THE MATRIX ON THE HOST PROCESS
-    virtual void define_matrix(const MatrixType_ &matrix) {
+        m_size = matrix.rows();
+        if (getProcessRank() == 0) {
+            m_matrix = matrix;
+            m_matrix.makeCompressed();
 
-        n_ = matrix.rows();
+            m_colIndices.reserve(m_matrix.nonZeros());
+            m_rowIndices.reserve(m_matrix.nonZeros());
 
-        if (rank_ == 0) {
-        // scaling the indexes for MUMPS
-        col_indices_ = (StorageOrder == ColMajor) ? 
-            mumps_index_scaling(matrix.innerIndexPtr(), matrix.innerIndexPtr() + matrix.nonZeros())
-            : mumps_index_scaling(matrix.outerIndexPtr(), matrix.outerIndexPtr() + matrix.nonZeros());
-        row_indices_ = (StorageOrder == ColMajor) ? 
-            mumps_index_scaling(matrix.outerIndexPtr(), matrix.outerIndexPtr() + matrix.nonZeros())
-            : mumps_index_scaling(matrix.innerIndexPtr(), matrix.innerIndexPtr() + matrix.nonZeros());
+            for (int k = 0; k < m_matrix.outerSize(); ++k) {   // already scales to 1-based indexing
+                for (typename MatrixType::InnerIterator it(m_matrix, k); it; ++it) {
+                    m_rowIndices.push_back(it.row() + 1);
+                    m_colIndices.push_back(it.col() + 1);
+                }
+            }
 
-        // defining the problem on the host
-            mumps_.n = matrix.rows();
-            mumps_.nnz = matrix.nonZeros();
-            mumps_.irn = row_indices_.data();
-            mumps_.jcn = col_indices_.data();
+            // defining the problem on the host
+            m_mumps.n = m_matrix.rows();
+            m_mumps.nnz = m_matrix.nonZeros();
+            m_mumps.irn = m_rowIndices.data();
+            m_mumps.jcn = m_colIndices.data();
 
-            mumps_.a = const_cast<Scalar *>(matrix.valuePtr());
+            m_mumps.a = const_cast<Scalar*>(m_matrix.valuePtr());
         }
+        m_matrixDefined = true;
     }
 
-    // METHOD FOR EXECUTING MUMPS JOBS
-    void mumps_execute(const int job) {
-        mumps_.job = job;
-        dmumps_c(&mumps_);
-        if (rank_ == 0)
-            errorCheck();
+    // virtual void define_matrix(const MatrixType &matrix) {
+    //   if (m_matrixDefined == true) {
+    //       int exit_code = 0;
+    //         if (getProcessRank() == 0) {
+    //           if (m_size == matrix.rows() && m_matrix.isApprox(matrix)) { exit_code = 1; }
+    //       }
+    //       MPI_Bcast(&exit_code, 1, MPI_INT, 0, m_mpiComm);
+    //       if (exit_code == 1) { return; }
+    //   }
+
+    //   m_matrixDefined = false;
+    //   m_isInitialized = false;
+    //   m_analysisIsOk = false;
+    //   m_factorizationIsOk = false;
+    //   MatrixType temp = matrix;
+    //   temp.makeCompressed();
+    //   m_size = temp.rows();
+    //   if (getProcessRank() == 0) {
+    //     m_matrix = temp;
+    //   }
+
+    //   std::vector<int> loc_row_indices;
+    //   std::vector<int> loc_col_indices;
+
+    //   int loc_start;
+    //   int loc_end;
+
+    //   int loc_size = temp.outerSize() / getProcessSize();
+    //   int loc_size_remainder = temp.outerSize() % getProcessSize();
+
+    //   if (getProcessRank() < loc_size_remainder) {
+    //     loc_start = getProcessRank() * (loc_size + 1);
+    //     loc_end = loc_start + loc_size + 1;
+    //   } else {
+    //     loc_start = getProcessRank() * loc_size + loc_size_remainder;
+    //     loc_end = loc_start + loc_size;
+    //   }
+
+    //   loc_row_indices.reserve(temp.nonZeros());
+    //   loc_col_indices.reserve(temp.nonZeros());
+
+    //   for (int k = loc_start; k < loc_end; ++k) {
+    //     for (SparseMatrix<double>::InnerIterator it(temp, k); it; ++it) {
+    //       loc_row_indices.push_back(it.row() + 1);
+    //       loc_col_indices.push_back(it.col() + 1);
+    //     }
+    //   }
+
+    //   // Gather local sizes first
+    //   int local_size = loc_row_indices.size();
+    //   std::vector<int> all_sizes(getProcessSize());
+    //   MPI_Gather(&local_size, 1, MPI_INT, all_sizes.data(), 1, MPI_INT, 0, m_mpiComm);
+
+    //   // Calculate displacements for gathering
+    //   std::vector<int> displacements(getProcessSize());
+    //   if (getProcessRank() == 0) {
+    //     displacements[0] = 0;
+    //     for (int i = 1; i < getProcessSize(); ++i) {
+    //       displacements[i] = displacements[i - 1] + all_sizes[i - 1];
+    //     }
+    //     m_rowIndices.resize(std::accumulate(all_sizes.begin(), all_sizes.end(), 0));
+    //     m_colIndices.resize(std::accumulate(all_sizes.begin(), all_sizes.end(), 0));
+    //   }
+
+    //   // Gather all local indices into the global vectors on the root process
+    //   MPI_Gatherv(loc_row_indices.data(), local_size, MPI_INT, m_rowIndices.data(), all_sizes.data(),
+    //               displacements.data(), MPI_INT, 0, m_mpiComm);
+
+    //   MPI_Gatherv(loc_col_indices.data(), local_size, MPI_INT, m_colIndices.data(), all_sizes.data(),
+    //               displacements.data(), MPI_INT, 0, m_mpiComm);
+
+    //   if (getProcessRank() == 0) {
+    //     m_mumps.n = m_matrix.rows();
+    //     m_mumps.nnz = m_matrix.nonZeros();
+    //     m_mumps.irn = m_rowIndices.data();
+    //     m_mumps.jcn = m_colIndices.data();
+
+    //     m_mumps.a = const_cast<Scalar *>(m_matrix.valuePtr());
+    //   }
+    // }
+
+    void mumps_execute(const int job) const {
+        if (m_mumps.job == -2 && job != -1) {
+            if (getProcessRank() == 0) {
+                std::cerr << "MUMPS is already finalized. You cannot execute any job." << std::endl;
+            }
+            exit(1);
+        }
+        m_mumps.job = job;
+        dmumps_c(&m_mumps);
+
+        if (job == -1) {
+            if (getProcessRank() == 0) {
+                m_mumps.icntl[0] = (m_verbose) ? 6 : -1;   // 6: verbose output, -1: no output
+                m_mumps.icntl[1] = (m_verbose) ? 6 : -1;   // 6: verbose output, -1: no output
+                m_mumps.icntl[2] = (m_verbose) ? 6 : -1;   // 6: verbose output, -1: no output
+                m_mumps.icntl[3] = (m_verbose) ? 4 : 0;    // 4: verbose output, 0: no output
+            } else {
+                m_mumps.icntl[0] = -1;
+                m_mumps.icntl[1] = -1;
+                m_mumps.icntl[2] = -1;
+                m_mumps.icntl[3] = 0;
+            }
+
+            m_mumps.icntl[32] =
+              (m_computeDeterminant) ? 1 : 0;   // 1: compute determinant, 0: do not compute determinant
+        }
+
+        errorCheck();
+    }
+
+    virtual void analyzePattern_impl() {
+        fdapde_assert(
+          m_matrixDefined &&
+          "The matrix must be defined first with private method define_matrix() before calling analyze()");
+        m_info = InvalidInput;
+        mumps_execute(1);   // 1: analyze
+        m_info = Success;
+        m_isInitialized = true;
+        m_analysisIsOk = true;
+        m_factorizationIsOk = false;
+    }
+
+    void factorize_impl() {
+        fdapde_assert(
+          m_analysisIsOk &&
+          "The matrix pattern must be analyzed first with analyzePattern() before calling factorize()");
+        m_info = NumericalIssue;
+        mumps_execute(2);   // 2: factorize
+        m_info = Success;
+        m_factorizationIsOk = true;
+    }
+
+    virtual void compute_impl() {
+        analyzePattern_impl();
+        factorize_impl();
     }
 
     // METHODS FOR ERROR CHECKING (EXPLICIT ERROR MESSAGES)
-    void errorCheck() {
-        if (INFOG(1) < 0) {
-            std::string job_name;
-            switch (mumps_.job) {
-            case JOB_INIT:
-                job_name = "initialization";
-                break;
-            case 1:
-                job_name = "analysis";
-                break;
-            case 2:
-                job_name = "factorization";
-                break;
-            case 3:
-                job_name = "solve";
-                break;
-            case JOB_END:
-                job_name = "finalization";
-                break;
-            default:
-                job_name = "unknown";
+    void errorCheck() const {
+        if (mumpsInfog()[0] < 0) {
+            if (!m_verbose && getProcessRank() == 0) {
+                std::string job_name;
+                switch (m_mumps.job) {
+                case -2:
+                    job_name = "Finalization";
+                    break;
+                case -1:
+                    job_name = "Initialization";
+                    break;
+                case 1:
+                    job_name = "Analysis";
+                    break;
+                case 2:
+                    job_name = "Factorization";
+                    break;
+                case 3:
+                    job_name = "Solve";
+                    break;
+                default:
+                    job_name = "Unknown";
+                }
+                std::cerr << "Error occured during " + job_name + " phase." << std::endl;
+                std::cerr << "MUMPS error mumpsInfog()[0]: " << mumpsInfog()[0] << std::endl;
+                std::cerr << "MUMPS error mumpsInfog()[1]: " << mumpsInfog()[1] << std::endl;
             }
-            std::cerr << "Error occured during " + job_name + " phase" << std::endl;
-            std::cerr << "MUMPS error INFOG(1): " << INFOG(1) << std::endl;
-            std::cerr << "MUMPS error INFOG(2): " << INFOG(2) << std::endl;
             exit(1);
         }
     }
+   protected:
+    mutable DMUMPS_STRUC_C m_mumps;
+
+    // matrix data
+    MatrixType m_matrix;
+    Index m_size;   // only matrix related member defined on all processes
+    std::vector<int> m_colIndices;
+    std::vector<int> m_rowIndices;
+
+    // mpi
+    int m_mpiRank;
+    int m_mpiSize;
+    MPI_Comm m_mpiComm;
+
+    // flags
+    bool m_verbose;
+    bool m_computeDeterminant;
+
+    // computation flags
+    bool m_matrixDefined;
+    bool m_analysisIsOk;
+    bool m_factorizationIsOk;
+
+    mutable ComputationInfo m_info;
+
+    // parameter wrappers
+    MumpsIcntlArray m_mumpsIcntl;
+    MumpsCntlArray m_mumpsCntl;
+    MumpsInfoArray m_mumpsInfo;
+    MumpsInfoArray m_mumpsInfog;
+    MumpsRinfoArray m_mumpsRinfo;
+    MumpsRinfoArray m_mumpsRinfog;
 };
 
-
-
 // MUMPS LU SOLVER
-template <isEigenSparseMatrix MatrixType_>
-class MumpsLU : public MumpsBase<MatrixType_> {
-
-    using Scalar = typename MatrixType_::Scalar;
-
-public:
-
+template <isEigenSparseMatrix MatrixType> class MumpsLU : public MumpsBase<MumpsLU<MatrixType>> {
+   protected:
+    using Base = MumpsBase<MumpsLU<MatrixType>>;
+   public:
     // CONSTRUCTORS
-    MumpsLU(): MumpsLU(MPI_COMM_WORLD, 0) {}
-    explicit MumpsLU(MPI_Comm comm): MumpsLU(comm, 0) {}
-    explicit MumpsLU(int flags): MumpsLU(MPI_COMM_WORLD, flags) {}
-    
-    MumpsLU(MPI_Comm comm, int flags): MumpsBase<MatrixType_>(comm, flags) {
+    MumpsLU() : MumpsLU(MPI_COMM_WORLD, 0) { }
+    explicit MumpsLU(MPI_Comm comm) : MumpsLU(comm, 0) { }
+    explicit MumpsLU(unsigned int flags) : MumpsLU(MPI_COMM_WORLD, flags) { }
+
+    MumpsLU(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
         // initialize MUMPS
-        this->mumps_.sym = 0;
-        this->mumps_execute(this->JOB_INIT);
+        Base::m_mumps.sym = 0;
+        Base::mumps_execute(-1);
+    }
+
+    explicit MumpsLU(const MatrixType& matrix) : MumpsLU(matrix, MPI_COMM_WORLD, 0) { }
+    MumpsLU(const MatrixType& matrix, MPI_Comm comm) : MumpsLU(matrix, comm, 0) { }
+    MumpsLU(const MatrixType& matrix, unsigned int flags) : MumpsLU(matrix, MPI_COMM_WORLD, flags) { }
+
+    MumpsLU(const MatrixType& matrix, MPI_Comm comm, unsigned int flags) : MumpsLU(comm, flags) {
+        Base::compute(matrix);
     }
 
     // DESTRUCTOR
     ~MumpsLU() override {
         // finalize MUMPS
-        this->mumps_execute(this->JOB_END);
+        Base::mumps_execute(-2);
     }
 };
 
-
-
 // MUMPS LDLT SOLVER
-template <isEigenSparseMatrix  MatrixType_, int Options>
-class MumpsLDLT : public MumpsBase< MatrixType_> {
-
-    using Scalar = typename MatrixType_::Scalar;
-
-public:
-
+template <isEigenSparseMatrix MatrixType, int Options> class MumpsLDLT : public MumpsBase<MumpsLDLT<MatrixType>> {
+   protected:
+    using Base = MumpsBase<MumpsLDLT<MatrixType>>;
+   public:
     // CONSTUCTORS
-    MumpsLDLT(): MumpsLDLT(MPI_COMM_WORLD) {}
-    explicit MumpsLDLT(MPI_Comm comm): MumpsLDLT(comm, 0) {}
-    explicit MumpsLDLT(int flags): MumpsLDLT(MPI_COMM_WORLD, flags) {}
-    MumpsLDLT(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
+    MumpsLDLT() : MumpsLDLT(MPI_COMM_WORLD, 0) { }
+    explicit MumpsLDLT(MPI_Comm comm) : MumpsLDLT(comm, 0) { }
+    explicit MumpsLDLT(unsigned int flags) : MumpsLDLT(MPI_COMM_WORLD, flags) { }
+
+    MumpsLDLT(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
         // initialize MUMPS
-        this->mumps_.sym = 1; // -> symmetric and positive definite
-        this->mumps_execute(this->JOB_INIT);
+        Base::m_mumps.sym = 1;   // -> symmetric and positive definite
+        Base::mumps_execute(-1);
+    }
+
+    explicit MumpsLDLT(const MatrixType& matrix) : MumpsLDLT(matrix, MPI_COMM_WORLD, 0) { }
+    MumpsLDLT(const MatrixType& matrix, MPI_Comm comm) : MumpsLDLT(matrix, comm, 0) { }
+    MumpsLDLT(const MatrixType& matrix, unsigned int flags) : MumpsLDLT(matrix, MPI_COMM_WORLD, flags) { }
+
+    MumpsLDLT(const MatrixType& matrix, MPI_Comm comm, unsigned int flags) : MumpsLDLT(comm, flags) {
+        Base::compute(matrix);
     }
 
     // DESTRUCTOR
     ~MumpsLDLT() override {
         // finalize MUMPS
-        this->mumps_execute(this->JOB_END);
+        Base::mumps_execute(-2);
     }
-
-protected:
-
-    MatrixType_ t_matrix_;
 
     // METHOD FOR DEFINING THE MATRIX ON THE HOST PROCESS (UPPER/LOWER TRIANGULAR)
-    void define_matrix(const MatrixType_ &matrix) override {
-        eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
-
-        this->n_ = matrix.rows();
-
-        if (this->rank_ == 0) {
-            t_matrix_ = matrix.template selfadjointView<Options>();
-
-            // scaling the indexes for MUMPS
-            this->col_indices_ = (this->StorageOrder == ColMajor) ? 
-                this->mumps_index_scaling(t_matrix_.innerIndexPtr(), t_matrix_.innerIndexPtr() + t_matrix_.nonZeros())
-                : this->mumps_index_scaling(t_matrix_.outerIndexPtr(), t_matrix_.outerIndexPtr() + t_matrix_.nonZeros());
-            this->row_indices_ = (this->StorageOrder == ColMajor) ? 
-                this->mumps_index_scaling(t_matrix_.outerIndexPtr(), t_matrix_.outerIndexPtr() + t_matrix_.nonZeros())
-                : this->mumps_index_scaling(t_matrix_.innerIndexPtr(), t_matrix_.innerIndexPtr() + t_matrix_.nonZeros());
-
-
-            // defining the problem on the host
-            this->mumps_.n = t_matrix_.rows();
-            this->mumps_.nnz = t_matrix_.nonZeros();
-            this->mumps_.irn = this->row_indices_.data();
-            this->mumps_.jcn = this->col_indices_.data();
-
-            this->mumps_.a = const_cast<Scalar *>(t_matrix_.valuePtr());
-        }
+    void define_matrix(const MatrixType& matrix) override {
+        Base::define_matrix(matrix.template triangularView<Options>());
     }
 };
-
 
 // MUMPS BLR SOLVER
 
 // USAGE: flags = [UFSC | UCFS] | [uncompressed_CB | compressed_CB] ---- (flags can be omitted and default will be used)
 
 // estimated compression rate of LU factors
-// ICNTL(38) = ... 
+// mumpsIcntl()[37] = ...
 // between 0 and 1000 (default: 600)
-// ICNTL(38)/10 is a percentage representing the typical compression of the compressed factors factor matrices in BLR fronts
+// mumpsIcntl()[37]/10 is a percentage representing the typical compression of the compressed factors factor matrices in
+// BLR fronts
 
 // estimated compression rate of contribution blocks
-// ICNTL(39) = ...
+// mumpsIcntl()[38] = ...
 // between 0 and 1000 (default: 500)
-// ICNTL(39)/10 is a percentage representing the typical compression of the compressed CB CB in BLR fronts
+// mumpsIcntl()[38]/10 is a percentage representing the typical compression of the compressed CB CB in BLR fronts
 
-
-template <isEigenSparseMatrix  MatrixType_>
-class MumpsBLR : public MumpsBase< MatrixType_>
-{
-    using Scalar = typename MatrixType_::Scalar;
-
-public:
-
+template <isEigenSparseMatrix MatrixType> class MumpsBLR : public MumpsBase<MumpsBLR<MatrixType>> {
+   protected:
+    using Base = MumpsBase<MumpsBLR<MatrixType>>;
+   public:
     // CONSTRUCTORS
-    MumpsBLR(): MumpsBLR(MPI_COMM_WORLD, 0, 0) {}
-    explicit MumpsBLR(MPI_Comm comm): MumpsBLR(comm, 0, 0) {}
-    explicit MumpsBLR(int flags): MumpsBLR(MPI_COMM_WORLD, flags, 0) {}
-    // explicit MumpsBLR(double dropping_parameter): MumpsBLR(MPI_COMM_WORLD, 0, dropping_parameter) {} --> do i want to allow this????
-    MumpsBLR(MPI_Comm comm, int flags): MumpsBLR(comm, flags, 0) {}
-    MumpsBLR(int flags, double dropping_parameter): MumpsBLR(MPI_COMM_WORLD, flags, dropping_parameter) {}
-    // MumpsBLR(MPI_Comm comm, double dropping_parameter): MumpsBLR(comm, 0, dropping_parameter) {} --> do i want to allow this????
+    MumpsBLR() : MumpsBLR(MPI_COMM_WORLD, 0, 0) { }
+    explicit MumpsBLR(MPI_Comm comm) : MumpsBLR(comm, 0, 0) { }
+    explicit MumpsBLR(unsigned int flags) : MumpsBLR(MPI_COMM_WORLD, flags, 0) { }
+    explicit MumpsBLR(double dropping_parameter) : MumpsBLR(MPI_COMM_WORLD, 0, dropping_parameter) { }
+    MumpsBLR(MPI_Comm comm, unsigned int flags) : MumpsBLR(comm, flags, 0) { }
+    MumpsBLR(unsigned int flags, double dropping_parameter) : MumpsBLR(MPI_COMM_WORLD, flags, dropping_parameter) { }
+    MumpsBLR(MPI_Comm comm, double dropping_parameter) : MumpsBLR(comm, 0, dropping_parameter) { }
 
-    MumpsBLR(MPI_Comm comm, int flags, double dropping_parameter): MumpsBase< MatrixType_>(comm, flags) {
-
-        eigen_assert(!(flags & UFSC && flags & UCFS) && "UFSC and UCFS cannot be set at the same time");
-        eigen_assert(!(flags & UNCOMPRESSED_CB && flags & COMPRESSED_CB) && "uncompressed_CB and compressed_CB cannot be set at the same time");
+    MumpsBLR(MPI_Comm comm, unsigned int flags, double dropping_parameter) : Base(comm, flags) {
+        fdapde_assert(!(flags & UFSC && flags & UCFS) && "UFSC and UCFS cannot be set at the same time");
 
         // initialize MUMPS
-        this->mumps_.sym = 0;
-        this->mumps_execute(this->JOB_INIT);
+        Base::m_mumps.sym = 0;
+        Base::mumps_execute(-1);
 
         // activate the BLR feature & set the BLR parameters
-        this->ICNTL(35) = 1; // 1: automatic choice of the BLR memory management strategy
-        this->ICNTL(36) = flags & UCFS; // set ICNTL(36) = 1 if UCFS is set, otherwise it remains 0 (default -> UFSC)
-        this->ICNTL(37) = flags & UNCOMPRESSED_CB; // set ICNTL(37) = 1 if compressed_CB is set, otherwise it remains 0 (default -> uncompressed_CB)
-        this->CNTL(7) = dropping_parameter; // set the dropping parameter
+        Base::mumpsIcntl()[34] = 1;   // 1: automatic choice of the BLR memory management strategy
+        Base::mumpsIcntl()[35] =
+          (flags & UCFS) ? 1 : 0;   // set mumpsIcntl()[35] = 1 if UCFS is set, otherwise it remains 0 (default -> UFSC)
+        Base::mumpsIcntl()[36] = (flags & Compressed) ? 1 : 0;   // set mumpsIcntl()[36] = 1 if compressed_CB is set,
+                                                                 // otherwise it remains 0 (default -> uncompressed_CB)
+        Base::mumpsCntl()[6] = dropping_parameter;               // set the dropping parameter
     }
 
+    explicit MumpsBLR(const MatrixType& matrix) : MumpsBLR(matrix, MPI_COMM_WORLD, 0, 0) { }
+    MumpsBLR(const MatrixType& matrix, MPI_Comm comm) : MumpsBLR(matrix, comm, 0, 0) { }
+    MumpsBLR(const MatrixType& matrix, unsigned int flags) : MumpsBLR(matrix, MPI_COMM_WORLD, flags, 0) { }
+    MumpsBLR(const MatrixType& matrix, double dropping_parameter) :
+        MumpsBLR(matrix, MPI_COMM_WORLD, 0, dropping_parameter) { }
+    MumpsBLR(const MatrixType& matrix, MPI_Comm comm, unsigned int flags) : MumpsBLR(matrix, comm, flags, 0) { }
+    MumpsBLR(const MatrixType& matrix, MPI_Comm comm, double dropping_parameter) :
+        MumpsBLR(matrix, comm, 0, dropping_parameter) { }
+    MumpsBLR(const MatrixType& matrix, unsigned int flags, double dropping_parameter) :
+        MumpsBLR(matrix, MPI_COMM_WORLD, flags, dropping_parameter) { }
+
+    MumpsBLR(const MatrixType& matrix, MPI_Comm comm, unsigned int flags, double dropping_parameter) :
+        MumpsBLR(comm, flags, dropping_parameter) {
+        Base::compute(matrix);
+    }
 
     // DESTRUCTOR
     ~MumpsBLR() override {
         // finalize MUMPS
-        this->mumps_execute(this->JOB_END);
+        Base::mumps_execute(-2);
     }
 };
 
-
-
 // MUMPS RANK REVEALING SOLVER
-template <isEigenSparseMatrix  MatrixType_>
-class MumpsRankRevealing : public MumpsBase< MatrixType_> {
+template <isEigenSparseMatrix MatrixType> class MumpsRR : public MumpsBase<MumpsRR<MatrixType>> {
+   protected:
+    using Base = MumpsBase<MumpsRR<MatrixType>>;
+   public:
+    using Scalar = typename Base::Scalar;
 
-    using Scalar = typename MatrixType_::Scalar;
-
-public:
+    using Base::solve;
 
     // CONSTRUCTOR
-    MumpsRankRevealing(): MumpsRankRevealing(MPI_COMM_WORLD, 0) {}
-    explicit MumpsRankRevealing(MPI_Comm comm): MumpsRankRevealing(comm, 0) {}
-    explicit MumpsRankRevealing(int flags): MumpsRankRevealing(MPI_COMM_WORLD, flags) {}
+    MumpsRR() : MumpsRR(MPI_COMM_WORLD, 0) { }
+    explicit MumpsRR(MPI_Comm comm) : MumpsRR(comm, 0) { }
+    explicit MumpsRR(unsigned int flags) : MumpsRR(MPI_COMM_WORLD, flags) { }
 
-    MumpsRankRevealing(MPI_Comm comm, int flags): MumpsBase< MatrixType_>(comm, flags) {
+    MumpsRR(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
         // initialize MUMPS
-        this->mumps_.sym = 0;
-        this->mumps_execute(this->JOB_INIT);
+        Base::m_mumps.sym = 0;
+        Base::mumps_execute(-1);
 
-        // set ICNTL(56) = 1 to perform rank revealing factorization
-        this->ICNTL(56) = 1;
+        Base::mumpsIcntl()[23] = 1;   // 1: null pivot detection
+        Base::mumpsIcntl()[55] = 1;   // 1: perform rank revealing factorization
+    }
+
+    explicit MumpsRR(const MatrixType& matrix) : MumpsRR(matrix, MPI_COMM_WORLD, 0) { }
+    MumpsRR(const MatrixType& matrix, MPI_Comm comm) : MumpsRR(matrix, comm, 0) { }
+    MumpsRR(const MatrixType& matrix, unsigned int flags) : MumpsRR(matrix, MPI_COMM_WORLD, flags) { }
+
+    MumpsRR(const MatrixType& matrix, MPI_Comm comm, unsigned int flags) : MumpsRR(comm, flags) {
+        Base::compute(matrix);
     }
 
     // DESTRUCTOR
-    ~MumpsRankRevealing() override {
+    ~MumpsRR() override {
         // finalize MUMPS
-        this->mumps_execute(this->JOB_END);
+        Base::mumps_execute(-2);
     }
 
     // NULL SPACE SIZE METHODS
     int nullSpaceSize() {
-        eigen_assert(this->matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling nullSpaceSize()");
-        return this->INFOG(28);
+        fdapde_assert(
+          Base::m_factorizationIsOk &&
+          "The matrix must be factorize_impld with factorize_impl() before calling nullSpaceSize()");
+        return Base::mumpsInfog()[27];
     }
 
     // RANK METHODS
     int rank() {
-        eigen_assert(this->matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling rank()");
-        return this->n_ - this->INFOG(28);
+        fdapde_assert(
+          Base::m_factorizationIsOk &&
+          "The matrix must be factorize_impld with factorize_impl() before calling rank()");
+        return Base::m_size - Base::mumpsInfog()[27];
     }
 
-    // NULL SPACE BASIS METHODS
+    // NULL SPACE BASIS METHODS)
     MatrixXd nullSpaceBasis() {
-        eigen_assert(this->matrix_computed_ && "The matrix must be computed with compute(Matrix) before calling nullSpaceBasis()");
+        fdapde_assert(
+          Base::m_factorizationIsOk &&
+          "The matrix must be factorize_impld with factorize_impl() before calling nullSpaceBasis()");
 
-        int null_space_size_ = nullSpaceSize();
+        int null_space_size_ = Base::mumpsInfog()[27];
 
-        if(null_space_size_ == 0) {
-            std::cout << "The matrix is full rank, the null space is empty" << std::endl;
-            return MatrixXd::Zero(this->n_, 0);
-        }
+        if (null_space_size_ == 0) { return MatrixXd::Zero(Base::m_size, 0); }
 
         // allocate memory for the null space basis
         std::vector<Scalar> buff;
-        buff.resize(this->n_ * null_space_size_);
+        buff.resize(Base::m_size * null_space_size_);
 
-        if(this->rank_ == 0) {
-            this->mumps_.rhs = buff.data();
-            this->mumps_.nrhs = null_space_size_;
+        if (Base::getProcessRank() == 0) {
+            Base::m_mumps.nrhs = null_space_size_;
+            Base::m_mumps.rhs = buff.data();
         }
 
-        this->ICNTL(25) = 1; // 1: perform a null space basis computation step
-        this->mumps_execute(3); // 3 : solve
-        this->ICNTL(25) = 0; // reset ICNTL(25) to 0 -> a noral solve can be called
+        Base::mumpsIcntl()[24] = 1;   // 1: perform a null space basis computation step
+        Base::mumps_execute(3);       // 3 : solve
+        Base::mumpsIcntl()[24] = 0;   // reset mumpsIcntl()[24] to 0 -> a normal solve can be called
 
-        MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, this->comm_);
+        MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, Base::m_mpiComm);
 
-        return Map<MatrixXd>(buff.data(), this->n_, null_space_size_); // --> matrix columns are the null space basis vectors
+        // --> matrix columns are the null space basis vectors
+        return Map<MatrixXd>(buff.data(), Base::m_size, null_space_size_);
     }
 };
 
-
 // CLASS FOR COMPUTING THE SHUR COMPLEMENT
-template <isEigenSparseMatrix  MatrixType_>
-class MumpsSchurComplement : public MumpsBase< MatrixType_> {
-
-    using Scalar = typename MatrixType_::Scalar;
-
-protected:
-    int schur_size_;
-    std::vector<int> schur_indices_;
-    std::vector<Scalar> schur_buff_;
-    using MumpsBase<MatrixType_>::compute; // redefining base class method as private to prevent the user from accessing this version of compute
-
-public:
+template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<MumpsSchur<MatrixType>> {
+   protected:
+    using Base = MumpsBase<MumpsSchur<MatrixType>>;
+   public:
+    using Scalar = typename Base::Scalar;
 
     // CONSTRUCTOR
-    MumpsSchurComplement() : MumpsSchurComplement(MPI_COMM_WORLD) {}
-    explicit MumpsSchurComplement(MPI_Comm comm): MumpsBase< MatrixType_>(comm) {
-        this->mumps_.sym = 0;
-        this->mumps_execute(this->JOB_INIT); // initialize MUMPS
+    MumpsSchur() : MumpsSchur(MPI_COMM_WORLD, 0) { }
+    explicit MumpsSchur(MPI_Comm comm) : MumpsSchur(comm, 0) { }
+    explicit MumpsSchur(unsigned int flags) : MumpsSchur(MPI_COMM_WORLD, flags) { }
 
-        this->ICNTL(19) = 3; // 3: distributed by columns (changing parameters to cenralize it)
-        this->mumps_.nprow = this->mumps_.npcol = 1;
-        this->mumps_.mblock = this->mumps_.nblock = 100;
+    MumpsSchur(MPI_Comm comm, unsigned int flags) : Base(comm, flags), m_schurIndicesSet(false) {
+        Base::m_mumps.sym = 0;
+        Base::mumps_execute(-1);   // initialize MUMPS
+
+        Base::mumpsIcntl()[18] = 3;   // 3: distributed by columns (changing parameters to cenralize it)
+        Base::m_mumps.nprow = 1;
+        Base::m_mumps.npcol = 1;
+        Base::m_mumps.mblock = 100;
+        Base::m_mumps.nblock = 100;
+    }
+
+    MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices) :
+        MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, 0) { }
+    MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, MPI_Comm comm) :
+        MumpsSchur(matrix, schur_indices, comm, 0) { }
+    MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, unsigned int flags) :
+        MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, flags) { }
+
+    MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, MPI_Comm comm, unsigned int flags) :
+        MumpsSchur(comm, flags) {
+        setSchurIndices(schur_indices);
+        Base::compute(matrix);
     }
 
     // DESTRUCTOR
-    ~MumpsSchurComplement() override {
-        this->mumps_execute(this->JOB_END); // finalize MUMPS
+    ~MumpsSchur() override {
+        Base::mumps_execute(-2);   // finalize MUMPS
     }
 
-    void compute (const MatrixType_ &matrix, int schur_size, const std::vector<int> &schur_indices) { // Assuiming 0-based indexing for the Schur indices
-        
-        eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
-        eigen_assert(schur_size < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
-        eigen_assert(schur_indices.size() == schur_size && "The Schur indices must have the same size as the Schur complement size");
-        eigen_assert(std::is_sorted(schur_indices.begin(), schur_indices.end()) && "The Schur indices must be sorted in ascending order");
-        eigen_assert(std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() && "The Schur indices must be unique");
-        eigen_assert(schur_indices.front() >= 0 && schur_indices.back() < matrix.rows() && "The Schur indices must be within the matrix size");
+    MumpsSchur<MatrixType>& setSchurIndices(const std::vector<int>& schur_indices) {
+        fdapde_assert(schur_indices.size() > 0 && "The Schur complement size must be greater than 0");
+        fdapde_assert(
+          std::is_sorted(schur_indices.begin(), schur_indices.end()) &&
+          "The Schur indices must be sorted in ascending order");
+        fdapde_assert(
+          std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() &&
+          "The Schur indices must be unique");
+        fdapde_assert(schur_indices.front() >= 0 && "The Schur indices must be positive");
 
-        schur_size_ = schur_size;
-        schur_indices_ = this->mumps_index_scaling(schur_indices.data(), schur_indices.data() + schur_size_);
-        schur_buff_.resize(schur_size_ * schur_size_);
+        Base::m_mumps.size_schur = schur_indices.size();
 
-        this->mumps_.size_schur = schur_size_;
-        this->mumps_.listvar_schur = schur_indices_.data();
+        m_schurIndices = schur_indices;
+        std::for_each(m_schurIndices.begin(), m_schurIndices.end(), [](int& idx) { idx += 1; });
+        m_schurBuff.resize(Base::m_mumps.size_schur * Base::m_mumps.size_schur);
+        Base::m_mumps.listvar_schur = m_schurIndices.data();
 
-        if (this->rank_ == (this->mumps_.par + 1)%2) { // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
-            this->mumps_.schur_lld = schur_size_;
-            this->mumps_.schur = schur_buff_.data();
+        // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
+        if (Base::getProcessRank() == (Base::m_mumps.par + 1) % 2) {
+            Base::m_mumps.schur_lld = Base::m_mumps.size_schur;
+            Base::m_mumps.schur = m_schurBuff.data();
         }
-        
-        this->compute(matrix);
+
+        m_schurIndicesSet = true;
+
+        return *this;
     }
 
-    // SCHUR COMPLEMENT COMPUTATION METHODS
     MatrixXd complement() {
-        eigen_assert(this->matrix_computed_ && "The matrix must be computed with compute(Matrix, schur_size, schur_indices) before calling complement()");
-        MPI_Bcast(schur_buff_.data(), schur_buff_.size(), MPI_DOUBLE, (this->mumps_.par + 1)%2, this->comm_);
-        return Map<MatrixXd>(schur_buff_.data(), schur_size_, schur_size_);
+        fdapde_assert(
+          Base::m_factorizationIsOk && "The matrix must be factorized with factorize() before calling complement()");
+        MPI_Bcast(m_schurBuff.data(), m_schurBuff.size(), MPI_DOUBLE, (Base::m_mumps.par + 1) % 2, Base::m_mpiComm);
+        return Map<MatrixXd>(m_schurBuff.data(), Base::m_mumps.size_schur, Base::m_mumps.size_schur);
     }
+   protected:
+    void define_matrix(const MatrixType& matrix) override {
+        fdapde_assert(
+          matrix.rows() > Base::m_mumps.size_schur && "The Schur complement size must be smaller than the matrix size");
+        fdapde_assert(
+          matrix.cols() > Base::m_mumps.size_schur && "The Schur complement size must be smaller than the matrix size");
+        fdapde_assert(
+          m_schurIndices.back() <= matrix.rows() &&
+          "The Schur indices must be within the matrix size");   // m_schurIndices is 1-based
+        fdapde_assert(
+          m_schurIndices.back() <= matrix.cols() &&
+          "The Schur indices must be within the matrix size");   // m_schurIndices is 1-based
+
+        Base::define_matrix(matrix);
+    }
+
+    void analyzePattern_impl() override {
+        fdapde_assert(
+          m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling analyzePattern()");
+        Base::analyzePattern_impl();
+    }
+
+    void compute_impl() override {
+        fdapde_assert(
+          m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling compute()");
+        Base::compute_impl();
+    }
+   protected:
+    std::vector<int> m_schurIndices;
+    std::vector<Scalar> m_schurBuff;
+
+    bool m_schurIndicesSet;
 };
 
-} // namespace mumps
+}   // namespace mumps
 
-} // namespace fdapde
+}   // namespace fdapde
 
-#endif // __MUMPS_H__
+#endif   // __MUMPS_H__

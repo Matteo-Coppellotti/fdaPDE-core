@@ -34,3 +34,7 @@ experiments/test_RSVD/performances.csv
 
 #some test directories
 experiments/
+
+mumps_testing/mumps_fdapde_test
+mumps_testing/.cache
+mumps_testing/build/

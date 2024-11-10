@@ -72,10 +72,8 @@ fi
 cmake -Wno-dev ../CMakeLists.txt
 make
 if [ "$MEMCHECK" = true ]; then
-    valgrind --leak-check=full --track-origins=yes mpirun --use-hwthread-cpus ./mumps_fdapde_test 2>&1 | tee ../test_output.log
-
+    valgrind --leak-check=full --track-origins=yes mpirun --use-hwthread-cpus ./mumps_fdapde_test
 else
-    mpirun --use-hwthread-cpus ./mumps_fdapde_test 2>&1 | tee ../test_output.log
-
+    mpirun --use-hwthread-cpus ./mumps_fdapde_test
 fi
 rm mumps_fdapde_test

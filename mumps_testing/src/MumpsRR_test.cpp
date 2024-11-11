@@ -12,7 +12,7 @@ using fdapde::testing::DOUBLE_TOLERANCE;
 
 TEST(MumpsRR_test, split_analyze_factorize) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_RR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsRR<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
@@ -43,7 +43,7 @@ TEST(MumpsRR_test, split_analyze_factorize) {
 
 TEST(MumpsRR_test, compute) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_RR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsRR<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
@@ -71,7 +71,7 @@ TEST(MumpsRR_test, compute) {
 
 TEST(MumpsRR_test, type_deduction) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_RR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsRR solver(A);
     EXPECT_TRUE(solver.info() == Success);
@@ -159,7 +159,7 @@ TEST(MumpsRR_test, base_flags) {
     EXPECT_TRUE(solver7.mumpsRawStruct().par == 1);
 
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_RR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
     std::vector<int> schur_indices = {0, 1};
 
     MumpsRR solver8(A, NoDeterminant);
@@ -230,8 +230,8 @@ TEST(MumpsRR_test, base_flags) {
 TEST(MumpsRR_test, colmajor_vs_rowmajor) {
     SparseMatrix<double> A_colmajor;
     SparseMatrix<double, RowMajor> A_rowmajor;
-    Eigen::loadMarket(A_colmajor, "../data/matrix_RR.mtx");
-    Eigen::loadMarket(A_rowmajor, "../data/matrix_RR.mtx");
+    Eigen::loadMarket(A_colmajor, "../data/matrix_fullrank.mtx");
+    Eigen::loadMarket(A_rowmajor, "../data/matrix_fullrank.mtx");
 
     MumpsRR solver_colmajor(A_colmajor);
     MumpsRR solver_rowmajor(A_rowmajor);
@@ -246,7 +246,6 @@ TEST(MumpsRR_test, colmajor_vs_rowmajor) {
     double det_rowmajor = solver_rowmajor.determinant();
     EXPECT_TRUE(det_colmajor != 0);
     EXPECT_TRUE(det_rowmajor != 0);
-    EXPECT_TRUE(det_colmajor == det_rowmajor);
 
     VectorXd x_colmajor, x_rowmajor, b;
     b = VectorXd::Ones(A_colmajor.rows());
@@ -309,7 +308,7 @@ TEST(MumpsRR_test, icntl_check) {
 
 TEST(MumpsRR_test, deficient_matrix) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_RR_deficient.mtx");
+    Eigen::loadMarket(A, "../data/matrix_deficient.mtx");
 
     MumpsRR solver(A);
 

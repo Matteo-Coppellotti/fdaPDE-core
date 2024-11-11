@@ -3,6 +3,7 @@
 #include <unsupported/Eigen/SparseExtra>
 
 #include "../../fdaPDE/linear_algebra/mumps.h"
+#include "utils/rand_indices.h"
 
 using namespace fdapde::mumps;
 using namespace Eigen;
@@ -190,7 +191,7 @@ TEST(MumpsLU_test, base_flags) {
 
     MumpsLU solver11(A, NoDeterminant | Verbose | WorkingHost);
     if (solver11.getProcessRank() == 0) {
-        EXPECT_TRUE(solver11.mumpsIcntl ()[0] == 6);
+        EXPECT_TRUE(solver11.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver11.mumpsIcntl()[1] == 6);
         EXPECT_TRUE(solver11.mumpsIcntl()[2] == 6);
         EXPECT_TRUE(solver11.mumpsIcntl()[3] == 4);
@@ -199,7 +200,7 @@ TEST(MumpsLU_test, base_flags) {
     EXPECT_TRUE(solver11.mumpsRawStruct().par == 1);
 
     MumpsLU solver12(A, NoDeterminant | Verbose);
-        if (solver12.getProcessRank() == 0) {
+    if (solver12.getProcessRank() == 0) {
         EXPECT_TRUE(solver12.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver12.mumpsIcntl()[1] == 6);
         EXPECT_TRUE(solver12.mumpsIcntl()[2] == 6);
@@ -217,7 +218,7 @@ TEST(MumpsLU_test, base_flags) {
     EXPECT_TRUE(solver13.mumpsRawStruct().par == 1);
 
     MumpsLU solver14(A, Verbose | WorkingHost);
-        if (solver14.getProcessRank() == 0) {
+    if (solver14.getProcessRank() == 0) {
         EXPECT_TRUE(solver14.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver14.mumpsIcntl()[1] == 6);
         EXPECT_TRUE(solver14.mumpsIcntl()[2] == 6);
@@ -298,4 +299,110 @@ TEST(MumpsLU_test, colmajor_vs_rowmajor) {
     EXPECT_TRUE(X_rowmajor_rowcol.isApprox(X_rowmajor_rowrow, DOUBLE_TOLERANCE));
 
     EXPECT_TRUE(X_colmajor_colcol.isApprox(X_rowmajor_colcol, DOUBLE_TOLERANCE));
+}
+
+TEST(Mumps_LU, inverse_elements) {
+    SparseMatrix<double> A;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+
+    MumpsLU<SparseMatrix<double>> solver(A);
+    std::vector<std::pair<int, int>> elements;
+    randomInvIndices(elements, A.rows());
+    std::vector<Triplet<double>> inv_elements = solver.inverseElements(elements);
+    EXPECT_TRUE(inv_elements.size() == elements.size());
+
+    SparseMatrix<double> A_inv;
+    Eigen::loadMarket(A_inv, "../data/matrix_fullrank_inv.mtx");
+
+    SparseMatrix<double> A_inv_test(A.rows(), A.cols());
+    A_inv_test.setFromTriplets(inv_elements.begin(), inv_elements.end());
+    SparseMatrix<double> A_inv_expected(A.rows(), A.cols());
+    for (auto& element : inv_elements) {
+        A_inv_expected.insert(element.row(), element.col()) = A_inv.coeff(element.row(), element.col());
+    }
+    EXPECT_TRUE(A_inv_test.isApprox(A_inv_expected, 1e-4));   // HIGHER TOLERANCE, im computing the inverse in 2
+                                                              // different ways, so the results are not exactly the same
+}
+
+TEST(MumpsLU_test, split_analyze_factorize_sparse) {
+    SparseMatrix<double> A;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+
+    MumpsLU<SparseMatrix<double>> solver;
+    EXPECT_TRUE(solver.rows() == 0);
+    EXPECT_TRUE(solver.cols() == 0);
+
+    solver.analyzePattern(A);
+    EXPECT_TRUE(solver.info() == Success);
+    EXPECT_TRUE(solver.rows() == A.rows());
+    EXPECT_TRUE(solver.cols() == A.cols());
+
+    solver.factorize(A);
+    EXPECT_TRUE(solver.info() == Success);
+    double det = solver.determinant();
+    EXPECT_TRUE(det != 0);
+
+    SparseMatrix<double> x, b;
+    b = VectorXd::Ones(A.rows()).sparseView();
+    x = solver.solve(b);
+    SparseMatrix<double> Ax = A * x;
+    EXPECT_TRUE(Ax.isApprox(b, DOUBLE_TOLERANCE));
+
+    SparseMatrix<double> X, B;
+    B = MatrixXd::Ones(A.rows(), 3).sparseView();
+    X = solver.solve(B);
+    SparseMatrix<double> AX = A * X;
+    EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
+}
+
+TEST(MumpsLU_test, compute_sparse) {
+    SparseMatrix<double> A;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+
+    MumpsLU<SparseMatrix<double>> solver;
+    EXPECT_TRUE(solver.rows() == 0);
+    EXPECT_TRUE(solver.cols() == 0);
+
+    solver.compute(A);
+    EXPECT_TRUE(solver.info() == Success);
+    EXPECT_TRUE(solver.rows() == A.rows());
+    EXPECT_TRUE(solver.cols() == A.cols());
+    double det = solver.determinant();
+    EXPECT_TRUE(det != 0);
+
+    SparseVector<double> x, b;
+    b = VectorXd::Ones(A.rows()).sparseView();
+    x = solver.solve(b);
+    SparseVector<double> Ax = A * x;
+    EXPECT_TRUE(Ax.isApprox(b, DOUBLE_TOLERANCE));
+
+    SparseMatrix<double> X, B;
+    B = MatrixXd::Ones(A.rows(), 3).sparseView();
+    X = solver.solve(B);
+    SparseMatrix<double> AX = A * X;
+    EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
+}
+
+TEST(MumpsLU_test, type_deduction_sparse) {
+    SparseMatrix<double> A;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+
+    MumpsLU solver(A);
+    EXPECT_TRUE(solver.info() == Success);
+    EXPECT_TRUE(solver.rows() == A.rows());
+    EXPECT_TRUE(solver.cols() == A.cols());
+    double det = solver.determinant();
+    EXPECT_TRUE(det != 0);
+
+    SparseVector<double> x, b;
+    b = VectorXd::Ones(A.rows()).sparseView();
+    x = solver.solve(b);
+    SparseVector<double> Ax = A * x;
+    EXPECT_TRUE(Ax.isApprox(b, DOUBLE_TOLERANCE));
+
+    SparseMatrix<double> X, B;
+    B = MatrixXd::Ones(A.rows(), 3).sparseView();
+    X = solver.solve(B);
+    SparseMatrix<double> AX = A * X;
+    EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
 }

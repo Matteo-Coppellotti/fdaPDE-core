@@ -42,28 +42,3 @@ mumps_testing/build/
 !mumps_testing/user_config.cmake
 !mumps_texsting/data/CMakeLists.txt
 
-
-build/
-CMakeFiles/
-.DS_Store
-.bash_history
-.idea/
-cmake-build-debug-docker/
-cmake-build-default/
-cmake-build-debug/
-experiments/test_RSVD/performances.csv
-.vscode
-
-#plots
-*.pdf
-*.png
-
-#help files
-*.csv
-
-#docs files
-*.puml
-.Rproj.user
-
-#some test directories
-experiments/

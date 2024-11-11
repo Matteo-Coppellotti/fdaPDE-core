@@ -10,6 +10,7 @@
 test/fdapde_test
 test/.cache
 test/build/
+
 mumps_testing/mumps_fdapde_test
 mumps_testing/.cache
 mumps_testing/build/

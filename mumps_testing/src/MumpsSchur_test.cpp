@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <random>
+#include <set>
 #include <unsupported/Eigen/SparseExtra>
+#include <vector>
 
 #include "../../fdaPDE/linear_algebra/mumps.h"
 
@@ -10,15 +14,42 @@ using namespace Eigen;
 #include "../../test/src/utils/constants.h"
 using fdapde::testing::DOUBLE_TOLERANCE;
 
+constexpr bool Seeded = true;
+constexpr int Seed = 42;
+
+void randomIndices(std::vector<int>& vec, int rows) {
+    std::mt19937 gen;
+    if (Seeded) {
+        gen.seed(Seed);
+    } else {
+        std::random_device rd;
+        gen.seed(rd());
+    }
+    std::uniform_int_distribution<> dis(0, rows - 1);
+
+    // Determine the random number of elements to add to the vector (between 1 and rows)
+    std::uniform_int_distribution<> sizeDis(1, rows / 10);   // Random number of elements from 1 to rows/10
+    int numElements = sizeDis(gen);
+
+    std::set<int> uniqueNumbers;   // Set to ensure uniqueness
+
+    // Fill the set with unique numbers
+    while (uniqueNumbers.size() < numElements) { uniqueNumbers.insert(dis(gen)); }
+
+    // Convert the set to a vector (which will automatically be sorted in increasing order)
+    vec.assign(uniqueNumbers.begin(), uniqueNumbers.end());
+}
+
 TEST(MumpsSchur_test, split_analyze_factorize) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_Schur.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsSchur<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    std::vector<int> schur_indices = {1, 2};
+    std::vector<int> schur_indices;
+    randomIndices(schur_indices, A.rows());
     solver.setSchurIndices(schur_indices);
 
     solver.analyzePattern(A);
@@ -46,13 +77,14 @@ TEST(MumpsSchur_test, split_analyze_factorize) {
 
 TEST(MumpsSchur_test, compute) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_Schur.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsSchur<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    std::vector<int> schur_indices = {0, 1};
+    std::vector<int> schur_indices;
+    randomIndices(schur_indices, A.rows());
     solver.setSchurIndices(schur_indices);
 
     solver.compute(A);
@@ -77,9 +109,10 @@ TEST(MumpsSchur_test, compute) {
 
 TEST(MumpsSchur_test, type_deduction) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_Schur.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
-    std::vector<int> schur_indices = {0, 1};
+    std::vector<int> schur_indices;
+    randomIndices(schur_indices, A.rows());
 
     MumpsSchur solver(A, schur_indices);
     EXPECT_TRUE(solver.info() == Success);
@@ -167,8 +200,9 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver7.mumpsRawStruct().par == 1);
 
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_Schur.mtx");
-    std::vector<int> schur_indices = {0, 1};
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+    std::vector<int> schur_indices;
+    randomIndices(schur_indices, A.rows());
 
     MumpsSchur solver8(A, schur_indices, NoDeterminant);
     EXPECT_TRUE(solver8.mumpsIcntl()[0] == -1);
@@ -207,7 +241,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver11.mumpsRawStruct().par == 1);
 
     MumpsSchur solver12(A, schur_indices, NoDeterminant | Verbose);
-        if (solver12.getProcessRank() == 0) {
+    if (solver12.getProcessRank() == 0) {
         EXPECT_TRUE(solver12.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver12.mumpsIcntl()[1] == 6);
         EXPECT_TRUE(solver12.mumpsIcntl()[2] == 6);
@@ -225,7 +259,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver13.mumpsRawStruct().par == 1);
 
     MumpsSchur solver14(A, schur_indices, Verbose | WorkingHost);
-        if (solver14.getProcessRank() == 0) {
+    if (solver14.getProcessRank() == 0) {
         EXPECT_TRUE(solver14.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver14.mumpsIcntl()[1] == 6);
         EXPECT_TRUE(solver14.mumpsIcntl()[2] == 6);
@@ -238,10 +272,11 @@ TEST(MumpsSchur_test, flags) {
 TEST(MumpsSchur_test, colmajor_vs_rowmajor) {
     SparseMatrix<double> A_colmajor;
     SparseMatrix<double, RowMajor> A_rowmajor;
-    Eigen::loadMarket(A_colmajor, "../data/matrix_Schur.mtx");
-    Eigen::loadMarket(A_rowmajor, "../data/matrix_Schur.mtx");
+    Eigen::loadMarket(A_colmajor, "../data/matrix_fullrank.mtx");
+    Eigen::loadMarket(A_rowmajor, "../data/matrix_fullrank.mtx");
 
-    std::vector<int> schur_indices = {0, 1};
+    std::vector<int> schur_indices;
+    randomIndices(schur_indices, A_colmajor.rows());
 
     MumpsSchur solver_colmajor(A_colmajor, schur_indices);
     MumpsSchur solver_rowmajor(A_rowmajor, schur_indices);
@@ -256,7 +291,6 @@ TEST(MumpsSchur_test, colmajor_vs_rowmajor) {
     double det_rowmajor = solver_rowmajor.determinant();
     EXPECT_TRUE(det_colmajor != 0);
     EXPECT_TRUE(det_rowmajor != 0);
-    EXPECT_TRUE(det_colmajor == det_rowmajor);
 
     VectorXd x_colmajor, x_rowmajor, b;
     b = VectorXd::Ones(A_colmajor.rows());

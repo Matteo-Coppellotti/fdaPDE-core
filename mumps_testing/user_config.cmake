@@ -1,0 +1,14 @@
+# Path to the MUMPS directory
+set(MUMPSDIR "/home/matteo/Desktop/MUMPS-openMPI-noBLACS")
+
+# Path to the eigen3 directory
+set(EIGENDIR "/home/matteo/Desktop/eigen")
+
+# Path to the scotch and ptscotch directory
+set(LSCOTCHDIR "/usr/lib")
+
+# Path to the metis and parmetis directory
+set(LMETISDIR "/usr/lib")
+
+# THIS COULD BE AUTOMATED WITH FETCH CONTENT IF NECESSARY 
+# EXCEPT FOR THE MUMPS DIRECTORY (I THINK)

@@ -732,12 +732,13 @@ template <isEigenSparseMatrix MatrixType> class MumpsRR : public MumpsBase<Mumps
 
         if (Base::getProcessRank() == 0) {
             Base::m_mumps.nrhs = null_space_size_;
+            Base::m_mumps.lrhs = Base::m_size;
             Base::m_mumps.rhs = buff.data();
         }
 
-        Base::mumpsIcntl()[24] = 1;   // 1: perform a null space basis computation step
-        Base::mumps_execute(3);       // 3 : solve
-        Base::mumpsIcntl()[24] = 0;   // reset mumpsIcntl()[24] to 0 -> a normal solve can be called
+        Base::mumpsIcntl()[24] = -1;   // -1: perform a null space basis computation step
+        Base::mumps_execute(3);        // 3 : solve
+        Base::mumpsIcntl()[24] = 0;    // reset mumpsIcntl()[24] to 0 -> a normal solve can be called
 
         MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, Base::m_mpiComm);
 

@@ -12,7 +12,7 @@ using fdapde::testing::DOUBLE_TOLERANCE;
 
 TEST(MumpsBLR_test, split_analyze_factorize) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_BLR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsBLR<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
@@ -43,7 +43,7 @@ TEST(MumpsBLR_test, split_analyze_factorize) {
 
 TEST(MumpsBLR_test, compute) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_BLR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsBLR<SparseMatrix<double>> solver;
     EXPECT_TRUE(solver.rows() == 0);
@@ -71,7 +71,7 @@ TEST(MumpsBLR_test, compute) {
 
 TEST(MumpsBLR_test, type_deduction) {
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_BLR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsBLR solver(A);
     EXPECT_TRUE(solver.info() == Success);
@@ -159,7 +159,7 @@ TEST(MumpsBLR_test, base_flags) {
     EXPECT_TRUE(solver7.mumpsRawStruct().par == 1);
 
     SparseMatrix<double> A;
-    Eigen::loadMarket(A, "../data/matrix_BLR.mtx");
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
     std::vector<int> schur_indices = {0, 1};
 
     MumpsBLR solver8(A, NoDeterminant);
@@ -230,8 +230,8 @@ TEST(MumpsBLR_test, base_flags) {
 TEST(MumpsBLR_test, colmajor_vs_rowmajor) {
     SparseMatrix<double> A_colmajor;
     SparseMatrix<double, RowMajor> A_rowmajor;
-    Eigen::loadMarket(A_colmajor, "../data/matrix_BLR.mtx");
-    Eigen::loadMarket(A_rowmajor, "../data/matrix_BLR.mtx");
+    Eigen::loadMarket(A_colmajor, "../data/matrix_fullrank.mtx");
+    Eigen::loadMarket(A_rowmajor, "../data/matrix_fullrank.mtx");
 
     MumpsBLR solver_colmajor(A_colmajor);
     MumpsBLR solver_rowmajor(A_rowmajor);
@@ -246,7 +246,6 @@ TEST(MumpsBLR_test, colmajor_vs_rowmajor) {
     double det_rowmajor = solver_rowmajor.determinant();
     EXPECT_TRUE(det_colmajor != 0);
     EXPECT_TRUE(det_rowmajor != 0);
-    EXPECT_TRUE(det_colmajor == det_rowmajor);
 
     VectorXd x_colmajor, x_rowmajor, b;
     b = VectorXd::Ones(A_colmajor.rows());

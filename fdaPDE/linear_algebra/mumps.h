@@ -21,8 +21,6 @@ namespace mumps {
 // concepts
 template <typename T>
 concept isEigenSparseMatrix = std::derived_from<T, SparseMatrixBase<T>>;
-template <typename T>
-concept isEigenDenseMatrix = std::derived_from<T, MatrixBase<T>>;
 
 class MPI_Manager {   // SINGLETON CLASS
    public:
@@ -208,10 +206,8 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     }
 
     template <typename BDerived, typename XDerived>
-        requires isEigenDenseMatrix<BDerived> && isEigenDenseMatrix<XDerived>
     void _solve_impl(const MatrixBase<BDerived>& b, MatrixBase<XDerived>& x) const {
-        fdapde_assert(
-          m_factorizationIsOk && "The matrix must be factorized with factorize(matrix) before calling solve(rhs)");
+        fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
 
         if (b.derived().data() == x.derived().data()) {   // inplace solve
             fdapde_assert((BDerived::Flags & RowMajorBit) == 0 && "Inplace solve doesn't support row-major rhs");
@@ -239,12 +235,121 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         MPI_Bcast(x.derived().data(), x.size(), MPI_DOUBLE, 0, m_mpiComm);
     }
 
+    template <typename BDerived, typename XDerived>
+    void _solve_impl(const SparseMatrix<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
+        fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
+
+        SparseMatrix<Scalar, ColMajor> loc_b = b;
+
+        std::vector<StorageIndex> irhs_ptr;
+        std::vector<StorageIndex> irhs_sparse;
+        std::vector<Scalar> rhs_sparse;
+
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> rhs(loc_b.rows(), loc_b.cols());
+
+        if (getProcessRank() == 0) {
+            irhs_ptr.reserve(loc_b.cols() + 1);
+            for (StorageIndex i = 0; i < loc_b.cols(); ++i) { irhs_ptr.push_back(loc_b.outerIndexPtr()[i] + 1); }
+            irhs_ptr.push_back(loc_b.nonZeros() + 1);
+
+            irhs_sparse.reserve(loc_b.nonZeros());
+            for (StorageIndex i = 0; i < loc_b.nonZeros(); ++i) { irhs_sparse.push_back(loc_b.innerIndexPtr()[i] + 1); }
+
+            rhs_sparse.reserve(loc_b.nonZeros());
+            for (StorageIndex i = 0; i < loc_b.nonZeros(); ++i) { rhs_sparse.push_back(loc_b.valuePtr()[i]); }
+
+            m_mumps.nz_rhs = loc_b.nonZeros();
+            m_mumps.nrhs = loc_b.cols();
+            m_mumps.lrhs = loc_b.rows();
+            m_mumps.rhs_sparse = rhs_sparse.data();
+            m_mumps.irhs_sparse = irhs_sparse.data();
+            m_mumps.irhs_ptr = irhs_ptr.data();
+            m_mumps.rhs = rhs.data();
+        }
+
+        m_mumps.icntl[19] = 1;   // 1: sparse right-hand side
+        mumps_execute(3);
+        m_mumps.icntl[19] = 0;   // reset to default
+
+        MPI_Bcast(rhs.data(), rhs.size(), MPI_DOUBLE, 0, m_mpiComm);
+
+        x = rhs.sparseView();
+    }
+
     Scalar determinant() {
         fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
         fdapde_assert(
           m_factorizationIsOk && "The matrix must be factoried with factorize_impl() before calling determinant()");
         if (mumpsInfog()[27] != 0) { return 0; }
         return mumpsRinfog()[11] * std::pow(2, mumpsInfog()[33]);
+    }
+
+    std::vector<Triplet<Scalar>> inverseElements(std::vector<std::pair<int, int>> elements) {
+        fdapde_assert(mumpsIcntl()[18] == 0 && "Incompatible with Schur complement");
+        fdapde_assert(
+          m_factorizationIsOk && "The matrix must be factorized with factorize() before calling inverseElements()");
+
+        // reored elements by col number
+        std::sort(elements.begin(), elements.end(), [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+            return a.second < b.second;
+        });
+
+        fdapde_assert(
+          std::adjacent_find(
+            elements.begin(), elements.end(),
+            [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+                return a.first == b.first && a.second == b.second;
+            }) == elements.end() &&
+          "The selected elements must be unique");
+
+        for (auto& elem : elements) {
+            fdapde_assert(elem.first >= 0 && elem.first < m_size && "The selected rows must be within the matrix size");
+            fdapde_assert(
+              elem.second >= 0 && elem.second < m_size && "The selected columns must be within the matrix size");
+        }
+
+        std::vector<Triplet<Scalar>> inv_elements;
+        inv_elements.reserve(elements.size());
+
+        std::vector<int> irhs_ptr;
+        std::vector<int> irhs_sparse;
+        std::vector<Scalar> rhs_sparse;
+
+        rhs_sparse.resize(elements.size());
+
+        if (getProcessRank() == 0) {
+            irhs_ptr.reserve(elements.size() + 1);
+            for (int i = 0; i < elements[0].second; ++i) { irhs_ptr.push_back(1); }
+            irhs_ptr.push_back(1);
+            for (size_t i = 1; i < elements.size(); ++i) {
+                if (elements[i].second != elements[i - 1].second) {
+                    for (int j = 0; j < elements[i].second - elements[i - 1].second; ++j) { irhs_ptr.push_back(i + 1); }
+                }
+            }
+            for (int i = elements.back().second; i <= m_size; ++i) { irhs_ptr.push_back(elements.size() + 1); }
+
+            irhs_sparse.reserve(elements.size());
+            for (const auto& elem : elements) { irhs_sparse.push_back(elem.first + 1); }
+
+            m_mumps.nz_rhs = elements.size();
+            m_mumps.nrhs = m_size;
+            m_mumps.lrhs = m_size;
+            m_mumps.irhs_ptr = irhs_ptr.data();
+            m_mumps.irhs_sparse = irhs_sparse.data();
+            m_mumps.rhs_sparse = rhs_sparse.data();
+        }
+
+        mumpsIcntl()[29] = 1;   // 1: compute selected elements of the inverse
+        mumps_execute(3);
+        mumpsIcntl()[29] = 0;   // reset to default
+
+        MPI_Bcast(rhs_sparse.data(), rhs_sparse.size(), MPI_DOUBLE, 0, m_mpiComm);
+
+        for (size_t i = 0; i < elements.size(); ++i) {
+            inv_elements.emplace_back(elements[i].first, elements[i].second, rhs_sparse[i]);
+        }
+
+        return inv_elements;
     }
 
     ComputationInfo info() const {
@@ -368,7 +473,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     //   loc_col_indices.reserve(temp.nonZeros());
 
     //   for (int k = loc_start; k < loc_end; ++k) {
-    //     for (SparseMatrix<double>::InnerIterator it(temp, k); it; ++it) {
+    //     for (typename MatrixType::InnerIterator it(temp, k); it; ++it) {
     //       loc_row_indices.push_back(it.row() + 1);
     //       loc_col_indices.push_back(it.col() + 1);
     //     }

@@ -34,8 +34,6 @@ SparseMatrix<double> generateSparseSPD(int size, double density, std::mt19937& g
         A.coeffRef(i, i) += size;   // Add a large enough constant to the diagonal
     }
 
-    A.makeCompressed();
-
     return A;
 }
 
@@ -60,8 +58,6 @@ SparseMatrix<double> generateSparseFullRank(int size, double density, std::mt199
     for (int i = 0; i < size; ++i) {
         A.coeffRef(i, i) += 1e-5;   // Adding a small value to the diagonal ensures full rank
     }
-
-    A.makeCompressed();
 
     return A;
 }
@@ -89,23 +85,21 @@ SparseMatrix<double> generateSparseRankDeficient(int size, double density, std::
     // set random rows to ones
     for (int i = 0; i < num_rows; ++i) {
         int row = gen() % size;
-        for (int j = 0; j < size; ++j) {
-            A.coeffRef(row, j) = 1.0;
-        }
+        for (int j = 0; j < size; ++j) { A.coeffRef(row, j) = 1.0; }
     }
-
-    A.makeCompressed();
 
     return A;
 }
 
 // Function to save a sparse matrix in Matrix Market (.mtx) format
-void saveMatrixMarket(const SparseMatrix<double>& A, const std::string& filename) {
+void saveMatrixMarket(SparseMatrix<double>& A, const std::string& filename) {
     std::ofstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error opening file for writing: " << filename << std::endl;
         return;
     }
+
+    A.makeCompressed();
 
     // Write Matrix Market header
     file << "%%MatrixMarket matrix coordinate real\n";
@@ -150,6 +144,26 @@ int main(int argc, char* argv[]) {
     std::cout << "Matrix saved to matrix_spd.mtx" << std::endl;
     std::cout << "Matrix saved to matrix_fullrank.mtx" << std::endl;
     std::cout << "Matrix saved to matrix_deficient.mtx" << std::endl;
+
+    // Calculate and save inverse of the symmetric positive definite matrix
+    SimplicialLLT<SparseMatrix<double>> spdSolver(spdMatrix);
+    if (spdSolver.info() == Success) {
+        SparseMatrix<double> spdInverse = spdSolver.solve(MatrixXd::Identity(size, size)).sparseView();
+        saveMatrixMarket(spdInverse, "../matrix_spd_inv.mtx");
+        std::cout << "Inverse of SPD matrix saved to matrix_spd_inv.mtx" << std::endl;
+    } else {
+        std::cerr << "Failed to compute inverse of SPD matrix" << std::endl;
+    }
+
+    // Calculate and save inverse of the full-rank matrix
+    SparseLU<SparseMatrix<double>> fullRankSolver(fullRankMatrix);
+    if (fullRankSolver.info() == Success) {
+        SparseMatrix<double> fullRankInverse = fullRankSolver.solve(MatrixXd::Identity(size, size)).sparseView();
+        saveMatrixMarket(fullRankInverse, "../matrix_fullrank_inv.mtx");
+        std::cout << "Inverse of full-rank matrix saved to matrix_fullrank_inv.mtx" << std::endl;
+    } else {
+        std::cerr << "Failed to compute inverse of full-rank matrix" << std::endl;
+    }
 
     return 0;
 }

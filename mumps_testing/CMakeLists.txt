@@ -10,15 +10,16 @@ set(CMAKE_Fortran_FLAGS "-O -fopenmp")
 find_package(MPI REQUIRED)
 find_package(OpenMP REQUIRED)
 
+# Fetch the user defined directories
 include(${CMAKE_SOURCE_DIR}/user_config.cmake)
 
-# Define library directories, change only if necessary
+# Define library directories
 set(IEIGENDIR "${EIGENDIR}")
 set(LPORDDIR "${MUMPSDIR}/PORD/lib")
 set(IDMUMPSDIR "${MUMPSDIR}/include")
 set(LDMUMPSDIR "${MUMPSDIR}/lib")
 
-# Define library variables (just the library names, no paths)
+# Define library variables
 set(LIBS_DMUMPS "dmumps" "mumps_common")
 set(LIBS_SCOTCH "ptesmumps" "ptscotch" "ptscotcherr")
 set(LIBS_METIS "parmetis" "metis")

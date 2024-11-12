@@ -1,3 +1,5 @@
+# PATHS NEED TO BE EXPLICIT, CMAKE DOES NOT EXPAND ENVIRONMENT VARIABLES
+
 # Path to the MUMPS directory
 set(MUMPSDIR "/home/matteo/Desktop/MUMPS-openMPI-noBLACS")
 

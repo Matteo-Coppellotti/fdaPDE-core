@@ -1,4 +1,4 @@
-#include <gtest/gtest.h> // Google Test Framework
+#include <gtest/gtest.h>
 
 #include "src/MumpsBLR_test.cpp"
 #include "src/MumpsLU_test.cpp"

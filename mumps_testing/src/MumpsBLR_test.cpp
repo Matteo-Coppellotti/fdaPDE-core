@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <unsupported/Eigen/SparseExtra>
-#include <vector>
 
 #include "../../fdaPDE/linear_algebra/mumps.h"
 #include "utils/rand_indices.h"

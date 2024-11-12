@@ -358,7 +358,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     // commentato. Inoltre, nel caso reputi che ricevere il set in input sia eccessivmente limitante, ho lasciato anche
     // il codice con input vector di pair e output vector di triplet commentato di seguito alla funzione.
     // Nel caso decida di cambiare il tipo di input/output, i test associati dovrebbero fallire ma ho lsciato nei file
-    // di testing i test per gli altri casi commentati in modo analogo. (anche utils.h)
+    // di testing i test per gli altri casi commentati in modo analogo. (utils già offre overloading per set e vector)
 
     // split into template + overloading to allow any key_compare in the input set but still ensure that my function
     // recieves the ordering i need (in this case OrderByColumns)
@@ -1122,8 +1122,8 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
     // e per garantire che siano ordinati in modo crescente. Questo mi permette di evitare di fare controlli con assert.
     // Devo però mantenere m_schurIndices come vector perchè ho bisogno di posizioni contigue in memmoria per mumps, che
     // vuole come input il puntatore c al primo elemento. Le lascio la versione con il vector in input commentata se
-    // decide di voler usare quella. (i test e utils.h devono essere cambiati di conseguenza, ho lasciato il codice
-    // commantato nei test e in utils.h nel caso si voglia usare il vector)
+    // decide di voler usare quella. (i test devono essere cambiati di conseguenza, ho lasciato il codice
+    // commantato nei test nel caso si voglia usare il vector, utils già offre overloading per set e vector)
 
     // split into template + overloading to allow any key_compare in the input set but still ensure that my function
     // recieves the ordering i need (in this case std::less<int>)

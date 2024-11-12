@@ -4,7 +4,7 @@ project(MUMPS_TESTING CXX Fortran)
 
 set(CMAKE_CXX_STANDARD 23)
 
-set(CMAKE_CXX_FLAGS "-O -fopenmp")
+set(CMAKE_CXX_FLAGS "-O -fopenmp -Wno-deprecated-declarations")
 set(CMAKE_Fortran_FLAGS "-O -fopenmp")
 
 find_package(MPI REQUIRED)

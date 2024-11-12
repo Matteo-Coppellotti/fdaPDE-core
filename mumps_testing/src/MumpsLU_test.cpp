@@ -306,9 +306,11 @@ TEST(Mumps_LU, inverse_elements) {
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsLU<SparseMatrix<double>> solver(A);
-    std::vector<std::pair<int, int>> elements;
+    // std::vector<std::pair<int, int>> elements;
+    std::set<std::pair<int, int>> elements;
     randomInvIndices(elements, A.rows());
     std::vector<Triplet<double>> inv_elements = solver.inverseElements(elements);
+    // std::set<Triplet<double>> inv_elements = solver.inverseElements(elements);
     EXPECT_TRUE(inv_elements.size() == elements.size());
 
     SparseMatrix<double> A_inv;

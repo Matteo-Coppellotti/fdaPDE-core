@@ -357,9 +357,11 @@ TEST(Mumps_BLR, inverse_elements) {
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
     MumpsBLR<SparseMatrix<double>> solver(A);
-    std::vector<std::pair<int, int>> elements;
+    // std::vector<std::pair<int, int>> elements;
+    std::set<std::pair<int, int>> elements;
     randomInvIndices(elements, A.rows());
     std::vector<Triplet<double>> inv_elements = solver.inverseElements(elements);
+    // std::set<Triplet<double>> inv_elements = solver.inverseElements(elements);
     EXPECT_TRUE(inv_elements.size() == elements.size());
 
     SparseMatrix<double> A_inv;
@@ -371,7 +373,8 @@ TEST(Mumps_BLR, inverse_elements) {
     for (auto& element : inv_elements) {
         A_inv_expected.insert(element.row(), element.col()) = A_inv.coeff(element.row(), element.col());
     }
-    EXPECT_TRUE(A_inv_test.isApprox(A_inv_expected, 1e-4));   // HIGHER TOLERANCE, im computing the inverse in 2
+
+    EXPECT_TRUE(A_inv_test.isApprox(A_inv_expected, 1e-4));   // HIGHER TOLERANCE, I'm computing the inverse in 2
                                                               // different ways, so the results are not exactly the same
 }
 

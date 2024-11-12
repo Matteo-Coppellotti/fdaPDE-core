@@ -21,6 +21,13 @@ namespace mumps {
 // concepts
 template <typename T>
 concept isEigenSparseMatrix = std::derived_from<T, SparseMatrixBase<T>>;
+// Integer set concept used in MumpsSchur
+template <typename Set>
+concept isIntSet = std::same_as<Set, std::set<int, typename Set::key_compare, typename Set::allocator_type>>;
+// Pair of integers set concept used in inverseElements
+template <typename Set>
+concept isPairIntIntSet =
+  std::same_as<Set, std::set<std::pair<int, int>, typename Set::key_compare, typename Set::allocator_type>>;
 
 struct OrderByColumns {   // Used to sort the elements in the inverseElements method
     bool operator()(const std::pair<int, int>& a, const std::pair<int, int>& b) const {
@@ -353,10 +360,25 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     // Nel caso decida di cambiare il tipo di input/output, i test associati dovrebbero fallire ma ho lsciato nei file
     // di testing i test per gli altri casi commentati in modo analogo. (anche utils.h)
 
+    // split into template + overloading to allow any key_compare in the input set but still ensure that my function
+    // recieves the ordering i need (in this case OrderByColumns)
+    template <isPairIntIntSet SetType> std::vector<Triplet<Scalar>> inverseElements(const SetType& elements) {
+        std::set<std::pair<int, int>, OrderByColumns> el(elements.begin(), elements.end());
+        return inverseElements(el);
+    }
+
+    // // se si vuole usare un set di triplet (the require can be replaced with a concept)
+    // template <isPairIntIntSet SetType, typename OutSet>
+    //     requires std::same_as<
+    //       OutSet, std::vector<Triplet<Scalar>>, typename OutSet::key_compare, typename OutSet::allocator_type>
+    // OutSet inverseElements(SetType& elements) {
+    //     std::set<std::pair<int, int>, OrderByColumns> el(elements.begin(), elements.end());
+    //     return OutSet(inverseElements(el).begin(), inverseElements(el).end());
+    // }
+
     // se si vuole usare un set di triplet
-    // std::set<Triplet<Scalar>> inverseElements(std::set<std::pair<int,int>>& el) {
-    std::vector<Triplet<Scalar>> inverseElements(std::set<std::pair<int, int>>& el) {
-        std::set<std::pair<int, int>, OrderByColumns> elements(el.begin(), el.end());
+    // std::set<Triplet<Scalar>> inverseElements(std::set<std::pair<int,int>, OrderByColumns>& el) {
+    std::vector<Triplet<Scalar>> inverseElements(const std::set<std::pair<int, int>, OrderByColumns>& elements) {
         fdapde_assert(
           mumpsIcntl()[18] == 0 &&
           "Incompatible with Schur complement");   // The Mumps icntls 18 and 29 are incompatible
@@ -1061,15 +1083,17 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
 
     // [MSG for A.Palummo] Ho cambiato gli schur indices da vector a set per funzionare con la nuova interfaccia di
     // setSchurIndices. Ho lasciato la versione con il vector commentata nel caso preferisca usare quella.
-
-    MumpsSchur(const MatrixType& matrix, const std::set<int>& schur_indices) :
+    template <isIntSet SetType>
+    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices) :
         MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, 0) { }
-    MumpsSchur(const MatrixType& matrix, const std::set<int>& schur_indices, MPI_Comm comm) :
+    template <isIntSet SetType>
+    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, MPI_Comm comm) :
         MumpsSchur(matrix, schur_indices, comm, 0) { }
-    MumpsSchur(const MatrixType& matrix, const std::set<int>& schur_indices, unsigned int flags) :
+    template <isIntSet SetType>
+    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, unsigned int flags) :
         MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, flags) { }
-
-    MumpsSchur(const MatrixType& matrix, const std::set<int>& schur_indices, MPI_Comm comm, unsigned int flags) :
+    template <isIntSet SetType>
+    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, MPI_Comm comm, unsigned int flags) :
         MumpsSchur(comm, flags) {
         setSchurIndices(schur_indices);
         Base::compute(matrix);
@@ -1100,6 +1124,15 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
     // vuole come input il puntatore c al primo elemento. Le lascio la versione con il vector in input commentata se
     // decide di voler usare quella. (i test e utils.h devono essere cambiati di conseguenza, ho lasciato il codice
     // commantato nei test e in utils.h nel caso si voglia usare il vector)
+
+    // split into template + overloading to allow any key_compare in the input set but still ensure that my function
+    // recieves the ordering i need (in this case std::less<int>)
+    // overloading of course is preferred to template if the SetType is std::set<int>
+    template <isIntSet SetType> MumpsSchur<MatrixType>& setSchurIndices(const SetType& schur_indices) {
+        std::set<int> idx(schur_indices.begin(), schur_indices.end());
+        return setSchurIndices(idx);
+    }
+
     MumpsSchur<MatrixType>& setSchurIndices(const std::set<int>& schur_indices) {
         fdapde_assert(schur_indices.size() > 0 && "The Schur complement size must be greater than 0");
         fdapde_assert(*schur_indices.begin() >= 0 && "The Schur indices must be positive");

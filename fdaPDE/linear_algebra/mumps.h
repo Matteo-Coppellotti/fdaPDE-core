@@ -21,32 +21,22 @@ namespace mumps {
 // concepts
 template <typename T>
 concept isEigenSparseMatrix = std::derived_from<T, SparseMatrixBase<T>>;
-// Integer set concept used in MumpsSchur
-template <typename Set>
-concept isIntSet = std::same_as<Set, std::set<int, typename Set::key_compare, typename Set::allocator_type>>;
-// Pair of integers set concept used in inverseElements
-template <typename Set>
-concept isPairIntIntSet =
-  std::same_as<Set, std::set<std::pair<int, int>, typename Set::key_compare, typename Set::allocator_type>>;
 
-struct OrderByColumns {   // Used to sort the elements in the inverseElements method
-    bool operator()(const std::pair<int, int>& a, const std::pair<int, int>& b) const {
-        if (a.second != b.second) {
-            return a.second < b.second;   // Compare by second element first
-        }
-        return a.first < b.first;   // If second elements are equal, compare by first element
-    }
-};
+template <typename Container, typename T>
+concept isStdContainerOf = requires(Container c) {
+    typename Container::value_type;
+    typename Container::iterator;
+    typename Container::size_type;
+    { c.begin() } -> std::input_iterator;
+    { c.end() } -> std::input_iterator;
+    { c.size() } -> std::integral;
+} && std::is_same_v<typename Container::value_type, T> || std::same_as<Container, std::initializer_list<T>>;
 
-// SINGLETON class for MPI initialization and finalization
-// [MSG for A.Palummo] Ho dovuto aggiungere questa classe perchè ho giustamente riscontrato problemi con lo scoping dei
-// solver: se dichiaravo il solver in uno scope e poi ne uscivo veniva chiamato il distruttore che finalizzava MPI,
-// purtroppo così facendo non era più possibile dichiarare solver nello stesso codice perchè avrebbe chiamato
-// automaticamente MPI_Init(), cosa che MPI non permetter dopo una call a MPI_Finalize(), oltre a creare problemi con i
-// getter delle flag MPI_Initialized() e MPI_Finalized(). Con questa classe posso quindi garantire che MPI_Init() e
-// MPI_Finalize() vengano chiamate una sola volta e che MPI_Init() venga chiamata prima di qualsiasi altra funzione MPI.
-// Ovviamente, se MPI_Init() e MPI_Finalize() vengono chiamate in modo esplicito nel codice, questa classe non ha alcun
-// effetto.
+template <typename Iterator, typename T>
+concept isStdIteratorOf =
+  std::input_iterator<Iterator> && std::is_same_v<typename std::iterator_traits<Iterator>::value_type, T>;
+
+// SINGLETON class for MPI initialization and finalization [!!!!TEMPORARY!!!!]
 class MPI_Manager {
    public:
     static MPI_Manager& getInstance() {
@@ -231,6 +221,9 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     }
 
     template <typename BDerived, typename XDerived>
+        requires(requires(BDerived b, XDerived x) {
+            { x.derived().resizeLike(b) };
+        })
     void _solve_impl(const MatrixBase<BDerived>& b, MatrixBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
 
@@ -260,18 +253,6 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         MPI_Bcast(x.derived().data(), x.size(), MPI_DOUBLE, 0, m_mpiComm);
     }
 
-    // [MSG for A.Palummo for A.Palummo] Questo overloading è stato aggiunto per mermettere la risoluzione di sistemi
-    // con sparse rhs, per quanto ho capito da Solve.h, Eigen non supporta il caso in cui rhs è sparso ma dest è denso.
-    // L'unico problema con questo overloading è che, al meglio della mia comprensione, Solve.h nega l'implementazione
-    // di Dense2Dense nel caso in cui dest sia RowMajor. Purtroppo non posso inserire assert per negare l'accesso a
-    // questo overloading nel caso in cui dest sia RowMajor, in quanto il check delle option credo sia fatto
-    // direttamente da Solve.h. COSA SUCCEDE SE USO solve() CON DEST SPARSA RowMajor? Solve.h non riconosce questo
-    // overloading e cercca di usare il metodo per matrici dense, che ovviamente porta a errori dovuti al fatto che i
-    // metodi forniti dalle due classi sono diversi. L'unica idea che mi viene è quella di creare un metodo solveSparse
-    // che prenda in input sia dest che rhs sparse, crei una copia converita in ColMajor, passi queste copie a solve e
-    // poi riconverta le copie in RowMajor e le assegni a dest. Questo metodo però è molto poco elegante e soprattutto
-    // devia dalla norma per quanto riguarda l'interazoine dell'utente con il metoto solve delle classi di Eigen. Lo
-    // lascio commentato dopo il metodo _solve_impl e mi affido al suo giudizio
     template <typename BDerived, typename XDerived>
     void _solve_impl(const SparseMatrix<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
@@ -287,14 +268,16 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         Matrix<Scalar, Dynamic, Dynamic, ColMajor> rhs(b.rows(), b.cols());
 
         if (getProcessRank() == 0) {
-            loc_b = b;
+            loc_b = b;   // I save a local copy because I need the matrix in compressed format in order for the accesses
+                         // to the needed pointers to be correct (not needed in define_matrix for example because there
+                         // i use the InnerIterator)
             loc_b.makeCompressed();
 
             irhs_ptr.reserve(loc_b.cols() + 1);
             for (StorageIndex i = 0; i < loc_b.cols(); ++i) {   // Already shifts to 1-based indexing
                 irhs_ptr.push_back(loc_b.outerIndexPtr()[i] + 1);
             }
-            irhs_ptr.push_back(loc_b.nonZeros() + 1);
+            irhs_ptr.push_back(loc_b.nonZeros() + 1);   // Mumps needs an extra value
 
             irhs_sparse.reserve(loc_b.nonZeros());
             for (StorageIndex i = 0; i < loc_b.nonZeros(); ++i) {   // Already shifts to 1-based indexing
@@ -340,52 +323,48 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
         fdapde_assert(
           m_factorizationIsOk && "The matrix must be factoried with factorize_impl() before calling determinant()");
-        if (mumpsInfog()[27] != 0) {
-            return 0;
-        }   // infog[27] stores the number of singularities, if it's not 0 the
-            // matrix is singular and the determinant is 0 (this is needed for RR since if not the determinant computed
-            // wouldn't be the actual determinant but determinant computed on a matrix with missing rows/columns [see
-            // MUMPS documentation])
         return mumpsRinfog()[11] *
                std::pow(2, mumpsInfog()[33]);   // Keep in mind that if infog[33] is very high std::pow will return inf
     }
 
-    // [MSG for A.Palummo] Questo metodo permette di calcolare l'incverso di un set di elementi della matrice. L'attuale
-    // implementazione prende in input un set di coordinate per gerantirne l'unicità e poi inserisco gli elementi in un
-    // mio set con custom ordering che ordina automaticamente gli indici per colonna per rendere la creazione delle
-    // strutture richieste da mumps più efficienti. Ho lasciato come output un vector di triplet, ma se preferisce
-    // impostare acnhe l'output come set di triplet non ci sono problemi, ho lasciato il codice necessario per farlo
-    // commentato. Inoltre, nel caso reputi che ricevere il set in input sia eccessivmente limitante, ho lasciato anche
-    // il codice con input vector di pair e output vector di triplet commentato di seguito alla funzione.
-    // Nel caso decida di cambiare il tipo di input/output, i test associati dovrebbero fallire ma ho lsciato nei file
-    // di testing i test per gli altri casi commentati in modo analogo. (utils già offre overloading per set e vector)
-
-    // split into template + overloading to allow any key_compare in the input set but still ensure that my function
-    // recieves the ordering i need (in this case OrderByColumns)
-    template <isPairIntIntSet SetType> std::vector<Triplet<Scalar>> inverseElements(const SetType& elements) {
-        std::set<std::pair<int, int>, OrderByColumns> el(elements.begin(), elements.end());
-        return inverseElements(el);
+    template <typename Container>
+        requires isStdContainerOf<Container, std::pair<int, int>>
+    std::vector<Triplet<Scalar>> inverseElements(const Container& elements) {
+        return inverseElements(elements.begin(), elements.end());
     }
 
-    // // se si vuole usare un set di triplet (the require can be replaced with a concept)
-    // template <isPairIntIntSet SetType, typename OutSet>
-    //     requires std::same_as<
-    //       OutSet, std::vector<Triplet<Scalar>>, typename OutSet::key_compare, typename OutSet::allocator_type>
-    // OutSet inverseElements(SetType& elements) {
-    //     std::set<std::pair<int, int>, OrderByColumns> el(elements.begin(), elements.end());
-    //     return OutSet(inverseElements(el).begin(), inverseElements(el).end());
-    // }
-
-    // se si vuole usare un set di triplet
-    // std::set<Triplet<Scalar>> inverseElements(std::set<std::pair<int,int>, OrderByColumns>& el) {
-    std::vector<Triplet<Scalar>> inverseElements(const std::set<std::pair<int, int>, OrderByColumns>& elements) {
+    template <typename Iterator>
+        requires isStdIteratorOf<Iterator, std::pair<int, int>>
+    std::vector<Triplet<Scalar>> inverseElements(Iterator begin, Iterator end) {
         fdapde_assert(
           mumpsIcntl()[18] == 0 &&
           "Incompatible with Schur complement");   // The Mumps icntls 18 and 29 are incompatible
         fdapde_assert(
           m_factorizationIsOk && "The matrix must be factorized with factorize() before calling inverseElements()");
-        fdapde_assert(elements.size() > 0 && "The set of elements must be non-empty");
-        for (const auto& elem : elements) {
+
+        std::vector<std::pair<int, int>> elements(begin, end);
+
+        fdapde_assert(elements.size() > 0 && "The container cannot be empty");
+
+        // reored elements by columns
+        std::sort(elements.begin(), elements.end(), [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+            if (a.second != b.second) {
+                return a.second < b.second;   // Compare by second element first
+            }
+            return a.first < b.first;   // If second elements are equal, compare by first element
+        });
+
+        fdapde_assert(   // check if the selected elements are unique (the adjacent_find could be done outside the
+                         // assert and save the ... == ... to a bool to then pun into the assert, I don't know
+                         // wheteher it would be peferred)
+          std::adjacent_find(
+            elements.begin(), elements.end(),
+            [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+                return a.first == b.first && a.second == b.second;
+            }) == elements.end() &&
+          "The selected elements must be unique");
+
+        for (auto& elem : elements) {
             fdapde_assert(elem.first >= 0 && elem.first < m_size && "The selected rows must be within the matrix size");
             fdapde_assert(
               elem.second >= 0 && elem.second < m_size && "The selected columns must be within the matrix size");
@@ -393,7 +372,6 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
 
         std::vector<Triplet<Scalar>> inv_elements;
         inv_elements.reserve(elements.size());
-        // std::set<Triplet<Scalar>> inv_elements;
 
         std::vector<int> irhs_ptr;   // Stores the indices of the fisrt requested element of each column, requires
                                      // 1-based indexing and an extra element at the end equal to the number of columns
@@ -408,22 +386,19 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
 
         if (getProcessRank() == 0) {
             irhs_ptr.reserve(m_size + 1);
-            for (int i = 0; i <= elements.begin()->second; ++i) {
+            for (int i = 0; i <= elements.front().second; ++i) {
                 irhs_ptr.push_back(1);
             }   // i nedd to fill the vector with 1 until the column of the first requested element (included)
-            auto prev = elements.begin();
-            int k = 1;   // position in the set (the for cycle starts from the second element)
-            for (auto it = std::next(elements.begin()); it != elements.end(); ++it) {
-                if (it->second != prev->second) {
-                    for (int j = 0; j < it->second - prev->second; ++j) { irhs_ptr.push_back(k + 1); }
+            for (size_t i = 1; i < elements.size(); ++i) {
+                if (elements[i].second != elements[i - 1].second) {
+                    for (int j = 0; j < elements[i].second - elements[i - 1].second; ++j) { irhs_ptr.push_back(i + 1); }
                 }
-                prev = it;
-                ++k;
-            }   // When the column changes, I need to insert into the vector the index of the first requested element of
-                // the new column, if there are empty columns I need to fill the vector with the index of the first
-                // requested element of the next column, with as many elements as the number of empty columns before the
-                // next column with requested elements (alredy shifted to 1-based indexing)
-            for (int i = prev->second; i <= m_size; ++i) {
+            }
+            // When the column changes, I need to insert into the vector the index of the first requested element of
+            //  the new column, if there are empty columns I need to fill the vector with the index of the first
+            //  requested element of the next column, with as many elements as the number of empty columns before the
+            //  next column with requested elements (alredy shifted to 1-based indexing)
+            for (int i = elements.back().second; i <= m_size; ++i) {
                 irhs_ptr.push_back(elements.size() + 1);
             }   // Adding the last entry as mumps requires (number of columns + 1 in position of the last column + 1)
 
@@ -446,108 +421,57 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
 
         MPI_Bcast(rhs_sparse.data(), rhs_sparse.size(), MPI_DOUBLE, 0, m_mpiComm);
 
-        int i = 0;
-        for (const auto& elem : elements) {
-            // se si vuole usare un set di triplet
-            // inv_elements.emplace(elem.first, elem.second, rhs_sparse[i++]);
-            inv_elements.emplace_back(elem.first, elem.second, rhs_sparse[i++]);
-        }   // the elements indices were not changed, so I can just copy them from the input vector
+        for (size_t i = 0; i < elements.size(); ++i) {
+            inv_elements.emplace_back(elements[i].first, elements[i].second, rhs_sparse[i]);
+        }   // the elements indices were not changed, so I can just copy them from the input vector (0-based indexing)
 
         return inv_elements;
     }
 
-    // std::vector<Triplet<Scalar>> inverseElements(std::vector<std::pair<int, int>> elements) {
-    //     fdapde_assert(
-    //       mumpsIcntl()[18] == 0 &&
-    //       "Incompatible with Schur complement");   // The Mumps icntls 18 and 29 are incompatible
-    //     fdapde_assert(
-    //       m_factorizationIsOk && "The matrix must be factorized with factorize() before calling inverseElements()");
+    Matrix<Scalar, Dynamic, Dynamic> inverse() {
+        fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling inverse()");
+        fdapde_assert(mumpsIcntl()[18] == 0 && "Incompatible with Schur complement");
 
-    //     // reored elements by col number
-    //     std::sort(elements.begin(), elements.end(), [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
-    //         return a.second < b.second;
-    //     });
+        std::vector<StorageIndex> irhs_ptr;   // Stores the indices of the non zeros in valuePts that start a new column
+                                              // like innerIndexPtr does but requires 1-based indexing and an extra
+                                              // element at the end equal to the number of nonzeros + 1
+        std::vector<StorageIndex> irhs_sparse;   // Stores the row indices of the nonzeros like outerIndexPtr does, but
+                                                 // requires 1-based indexing
+        std::vector<Scalar> rhs_sparse;          // Stores the values of the identity matrix
 
-    //     fdapde_assert(   // check if the selected elements are unique (the adjacent_find could be done outside the
-    //                      // assert and save the ... == ... to a bool to then pun into the assert, I don't know
-    //                      wheteher
-    //                      // it would be peferred)
-    //       std::adjacent_find(
-    //         elements.begin(), elements.end(),
-    //         [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
-    //             return a.first == b.first && a.second == b.second;
-    //         }) == elements.end() &&
-    //       "The selected elements must be unique");
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> inv(m_size, m_size);
 
-    //     for (auto& elem : elements) {
-    //         fdapde_assert(elem.first >= 0 && elem.first < m_size && "The selected rows must be within the matrix
-    //         size"); fdapde_assert(
-    //           elem.second >= 0 && elem.second < m_size && "The selected columns must be within the matrix size");
-    //     }
+        if (getProcessRank() == 0) {
+            irhs_ptr.resize(m_size + 1);
+            std::iota(irhs_ptr.begin(), irhs_ptr.end(), 1);   // 1-based indexing
 
-    //     std::vector<Triplet<Scalar>> inv_elements;
-    //     inv_elements.reserve(elements.size());
+            irhs_sparse.resize(m_size);
+            std::iota(irhs_sparse.begin(), irhs_sparse.end(), 1);   // 1-based indexing
 
-    //     std::vector<int> irhs_ptr;   // Stores the indices of the fisrt requested element of each column, requires
-    //                                  // 1-based indexing and an extra element at the end equal to the number of
-    //                                  columns
-    //                                  // + 1. It should have size = number of columns + 1
-    //                                  // In general, if a column doesn't have any requested element, the respective
-    //                                  entry
-    //                                  // should be equal to the next column's first requested element (if this is
-    //                                  empty
-    //                                  // as well the process should be repeated until a column with requested elements
-    //                                  is
-    //                                  // found and that index is used for the empty columns preceeding it as well)
-    //     std::vector<int> irhs_sparse;     // Stores the row indices of the requested elements, requires 1-based
-    //     indexing std::vector<Scalar> rhs_sparse;   // Stores the inverse of the requested elements
-    //     rhs_sparse.resize(elements.size());
+            rhs_sparse.resize(m_size, 1);
 
-    //     if (getProcessRank() == 0) {
-    //         irhs_ptr.reserve(elements.size() + 1);
-    //         for (int i = 0; i <= elements[0].second; ++i) {
-    //             irhs_ptr.push_back(1);
-    //         }   // i nedd to fill the vector with 1 until the column of the first requested element (included)
-    //         for (size_t i = 1; i < elements.size(); ++i) {
-    //             if (elements[i].second != elements[i - 1].second) {
-    //                 for (int j = 0; j < elements[i].second - elements[i - 1].second; ++j) { irhs_ptr.push_back(i +
-    //                 1); }
-    //             }
-    //         }   // When the column changes, I need to insert into the vector the index of the first requested element
-    //         of
-    //             // the new column, if there are empty columns I need to fill the vector with the index of the first
-    //             // requested element of the next column, with as many elements as the number of empty columns before
-    //             the
-    //             // next column with requested elements (alredy shifted to 1-based indexing)
-    //         for (int i = elements.back().second; i <= m_size; ++i) {
-    //             irhs_ptr.push_back(elements.size() + 1);
-    //         }   // Adding the last entry as mumps requires (number of columns + 1 in position of the last column + 1)
+            m_mumps.nz_rhs = m_size;
+            m_mumps.nrhs = m_size;
+            m_mumps.lrhs = m_size;
+            m_mumps.rhs_sparse = rhs_sparse.data();
+            m_mumps.irhs_sparse = irhs_sparse.data();
+            m_mumps.irhs_ptr = irhs_ptr.data();
+            m_mumps.rhs = const_cast<Scalar*>(inv.data());
+        }
 
-    //         irhs_sparse.reserve(elements.size());
-    //         for (const auto& elem : elements) {
-    //             irhs_sparse.push_back(elem.first + 1);
-    //         }   // already scales the row indices to 1-based indexing
+        m_mumps.icntl[19] = 1;   // 1: sparse right-hand side
+        mumps_execute(3);
+        m_mumps.icntl[19] = 0;   // reset to default
 
-    //         m_mumps.nz_rhs = elements.size();
-    //         m_mumps.nrhs = m_size;
-    //         m_mumps.lrhs = m_size;
-    //         m_mumps.irhs_ptr = irhs_ptr.data();
-    //         m_mumps.irhs_sparse = irhs_sparse.data();
-    //         m_mumps.rhs_sparse = rhs_sparse.data();
-    //     }
+        MPI_Bcast(inv.data(), inv.size(), MPI_DOUBLE, 0, m_mpiComm);
 
-    //     mumpsIcntl()[29] = 1;   // 1: compute selected elements of the inverse
-    //     mumps_execute(3);
-    //     mumpsIcntl()[29] = 0;   // reset to default
+        return inv;
+    }
 
-    //     MPI_Bcast(rhs_sparse.data(), rhs_sparse.size(), MPI_DOUBLE, 0, m_mpiComm);
-
-    //     for (size_t i = 0; i < elements.size(); ++i) {
-    //         inv_elements.emplace_back(elements[i].first, elements[i].second, rhs_sparse[i]);
-    //     }   // the elements indices were not changed, so I can just copy them from the input vector
-
-    //     return inv_elements;
-    // }
+    void mumpsFinalize() {
+        mumps_execute(-2);   // -2: finalize
+        m_mumpsFinalized = true;
+    }
 
     ComputationInfo info() const {
         fdapde_assert(m_isInitialized && "Decomposition is not initialized.");
@@ -558,9 +482,9 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_size(0),
         m_mpiComm(comm),
         m_info(InvalidInput),
-        m_matrixDefined(false),
         m_analysisIsOk(false),
         m_factorizationIsOk(false),
+        m_mumpsFinalized(false),
         m_mumpsIcntl(m_mumps.icntl),
         m_mumpsCntl(m_mumps.cntl),
         m_mumpsInfo(m_mumps.info),
@@ -583,85 +507,51 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_isInitialized = false;
     }
 
-    // DESTRUCTOR
     virtual ~MumpsBase() { }
 
-    // [MSG for A.Palummo] Ho aggiunto un check per evitare di ridefinire la matrice se è già stata definita. Questo è
-    // risultato necessario perchè l'interfaccia richiesta da SparseSolverBase prevede che i metodi analyzePattern e
-    // factorize vengano chiamati entrambi con la matrice come argument. Se la matrice è la setssa evito di ridefinire
-    // tutte le strutture di mumps mentre se viene cambiata voglio segnalare a factorize che la nuova matrice non è
-    // passata per analyzePattern. Questo mi permette anche di effettuare il reset di tutte le flag necessarie che prima
-    // erano spacchettate nei vari metodi.
-    // Per quanto riguarda la versione "iper-parallelizzata" la trova commantata dopo il metodo define_matrix, ho fatto
-    // un paio di prove veloci con delle matrici prese da matrix market ma non ho riscontrato particolari differenze in
-    // termini di velocità di computazione.
+    // [MSG for A.Palummo] Per quanto riguarda la versione "iper-parallelizzata" la trova commantata dopo il metodo
+    // define_matrix, ho fatto un paio di prove veloci con delle matrici prese da matrix market ma non ho riscontrato
+    // particolari differenze in termini di velocità di computazione.
     virtual void define_matrix(const MatrixType& matrix) {
         fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
         fdapde_assert(matrix.rows() > 0 && "The matrix must be non-empty");
 
-        if (m_matrixDefined == true) {
-            int exit_code = 0;
-            if (getProcessRank() == 0) {
-                if (m_size == matrix.rows() && m_matrix.isApprox(matrix)) { exit_code = 1; }
-            }
-            MPI_Bcast(&exit_code, 1, MPI_INT, 0, m_mpiComm);
-            if (exit_code == 1) { return; }
-        }
-
-        m_matrixDefined = false;
-        m_isInitialized = false;
-        m_analysisIsOk = false;
-        m_factorizationIsOk = false;
-
         m_size = matrix.rows();
         if (getProcessRank() == 0) {
-            m_matrix = matrix;
-            m_matrix.makeCompressed();
+            m_colIndices.clear();
+            m_rowIndices.clear();
+            m_values.clear();
 
-            m_colIndices.reserve(m_matrix.nonZeros());
-            m_rowIndices.reserve(m_matrix.nonZeros());
+            m_colIndices.reserve(matrix.nonZeros());
+            m_rowIndices.reserve(matrix.nonZeros());
+            m_values.reserve(matrix.nonZeros());
 
-            for (int k = 0; k < m_matrix.outerSize(); ++k) {   // already scales to 1-based indexing
-                for (typename MatrixType::InnerIterator it(m_matrix, k); it; ++it) {
+            for (int k = 0; k < matrix.outerSize(); ++k) {   // already scales to 1-based indexing
+                for (typename MatrixType::InnerIterator it(matrix, k); it; ++it) {
                     m_rowIndices.push_back(it.row() + 1);
                     m_colIndices.push_back(it.col() + 1);
+                    m_values.push_back(it.value());
                 }
             }
 
             // defining the problem on the host
-            m_mumps.n = m_matrix.rows();
-            m_mumps.nnz = m_matrix.nonZeros();
+            m_mumps.n = m_size;
+            m_mumps.nnz = matrix.nonZeros();
             m_mumps.irn = m_rowIndices.data();
             m_mumps.jcn = m_colIndices.data();
-
-            m_mumps.a = const_cast<Scalar*>(m_matrix.valuePtr());
+            m_mumps.a = m_values.data();
         }
-        m_matrixDefined = true;
     }
 
     // virtual void define_matrix(const MatrixType &matrix) {
-    //   if (m_matrixDefined == true) {
-    //       int exit_code = 0;
-    //         if (getProcessRank() == 0) {
-    //           if (m_size == matrix.rows() && m_matrix.isApprox(matrix)) { exit_code = 1; }
-    //       }
-    //       MPI_Bcast(&exit_code, 1, MPI_INT, 0, m_mpiComm);
-    //       if (exit_code == 1) { return; }
-    //   }
 
-    //   m_matrixDefined = false;
-    //   m_isInitialized = false;
-    //   m_analysisIsOk = false;
-    //   m_factorizationIsOk = false;
     //   MatrixType temp = matrix;
     //   temp.makeCompressed();
     //   m_size = temp.rows();
-    //   if (getProcessRank() == 0) {
-    //     m_matrix = temp;
-    //   }
 
     //   std::vector<int> loc_row_indices;
     //   std::vector<int> loc_col_indices;
+    //   std::vector<Scalar> loc_values;
 
     //   int loc_start;
     //   int loc_end;
@@ -679,11 +569,13 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
 
     //   loc_row_indices.reserve(temp.nonZeros());
     //   loc_col_indices.reserve(temp.nonZeros());
+    //   loc_values.reserve(temp.nonZeros());
 
     //   for (int k = loc_start; k < loc_end; ++k) {
     //     for (typename MatrixType::InnerIterator it(temp, k); it; ++it) {
     //       loc_row_indices.push_back(it.row() + 1);
     //       loc_col_indices.push_back(it.col() + 1);
+    //       loc_values.push_back(it.value());
     //     }
     //   }
 
@@ -699,8 +591,14 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     //     for (int i = 1; i < getProcessSize(); ++i) {
     //       displacements[i] = displacements[i - 1] + all_sizes[i - 1];
     //     }
+
+    //     m_rowIndices.clear();
+    //     m_colIndices.clear();
+    //     m_values.clear();
+
     //     m_rowIndices.resize(std::accumulate(all_sizes.begin(), all_sizes.end(), 0));
     //     m_colIndices.resize(std::accumulate(all_sizes.begin(), all_sizes.end(), 0));
+    //     m_values.resize(std::accumulate(all_sizes.begin(), all_sizes.end(), 0));
     //   }
 
     //   // Gather all local indices into the global vectors on the root process
@@ -710,13 +608,15 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     //   MPI_Gatherv(loc_col_indices.data(), local_size, MPI_INT, m_colIndices.data(), all_sizes.data(),
     //               displacements.data(), MPI_INT, 0, m_mpiComm);
 
+    //   MPI_Gatherv(loc_values.data(), local_size, MPI_DOUBLE, m_values.data(), all_sizes.data(), displacements.data(),
+    //               MPI_DOUBLE, 0, m_mpiComm);
+
     //   if (getProcessRank() == 0) {
-    //     m_mumps.n = m_matrix.rows();
-    //     m_mumps.nnz = m_matrix.nonZeros();
+    //     m_mumps.n = m_size;
+    //     m_mumps.nnz = matrix.nonZeros();
     //     m_mumps.irn = m_rowIndices.data();
     //     m_mumps.jcn = m_colIndices.data();
-
-    //     m_mumps.a = const_cast<Scalar *>(m_matrix.valuePtr());
+    //     m_mumps.a = m_values.data();
     //   }
     // }
 
@@ -756,9 +656,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_info = Success;
         m_isInitialized = true;
         m_analysisIsOk = true;
-        // m_factorizationIsOk = false;  // I don't think this is necessary, the factorization should be invalidated
-        // only if the matrix is changed (should i allow thE user to call analyzePattern, factorize and then
-        // analyzePattern again all with the same matrix and have the factorization be valid for the solve?)
+        m_factorizationIsOk = false;
     }
 
     void factorize_impl() {
@@ -769,12 +667,11 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_factorizationIsOk = true;
     }
 
-    void compute_impl() {
+    virtual void compute_impl() {
         analyzePattern_impl();
         factorize_impl();
     }
 
-    // METHODS FOR ERROR CHECKING (EXPLICIT ERROR MESSAGES)
     void errorCheck() const {
         if (mumpsInfog()[0] < 0) {
             if (!m_verbose && getProcessRank() == 0) {
@@ -809,8 +706,8 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     mutable DMUMPS_STRUC_C m_mumps;
 
     // matrix data
-    MatrixType m_matrix;
     Index m_size;   // only matrix related member defined on all processes
+    std::vector<Scalar> m_values;
     std::vector<int> m_colIndices;
     std::vector<int> m_rowIndices;
 
@@ -824,9 +721,9 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     bool m_computeDeterminant;
 
     // computation flags
-    bool m_matrixDefined;
     bool m_analysisIsOk;
     bool m_factorizationIsOk;
+    bool m_mumpsFinalized;
 
     mutable ComputationInfo m_info;
 
@@ -844,13 +741,11 @@ template <isEigenSparseMatrix MatrixType> class MumpsLU : public MumpsBase<Mumps
    protected:
     using Base = MumpsBase<MumpsLU<MatrixType>>;
    public:
-    // CONSTRUCTORS
     MumpsLU() : MumpsLU(MPI_COMM_WORLD, 0) { }
     explicit MumpsLU(MPI_Comm comm) : MumpsLU(comm, 0) { }
     explicit MumpsLU(unsigned int flags) : MumpsLU(MPI_COMM_WORLD, flags) { }
 
     MumpsLU(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
-        // initialize MUMPS
         Base::m_mumps.sym = 0;
         Base::mumps_execute(-1);   // -1: initialization
     }
@@ -863,10 +758,8 @@ template <isEigenSparseMatrix MatrixType> class MumpsLU : public MumpsBase<Mumps
         Base::compute(matrix);
     }
 
-    // DESTRUCTOR
     ~MumpsLU() override {
-        // finalize MUMPS
-        Base::mumps_execute(-2);   // -2: finalization
+        if (!Base::m_mumpsFinalized) { Base::mumpsFinalize(); }
     }
 };
 
@@ -875,13 +768,11 @@ template <isEigenSparseMatrix MatrixType, int Options> class MumpsLDLT : public 
    protected:
     using Base = MumpsBase<MumpsLDLT<MatrixType>>;
    public:
-    // CONSTUCTORS
     MumpsLDLT() : MumpsLDLT(MPI_COMM_WORLD, 0) { }
     explicit MumpsLDLT(MPI_Comm comm) : MumpsLDLT(comm, 0) { }
     explicit MumpsLDLT(unsigned int flags) : MumpsLDLT(MPI_COMM_WORLD, flags) { }
 
     MumpsLDLT(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
-        // initialize MUMPS
         Base::m_mumps.sym = 1;     // symmetric and positive definite
         Base::mumps_execute(-1);   // -1: initialization
     }
@@ -894,13 +785,10 @@ template <isEigenSparseMatrix MatrixType, int Options> class MumpsLDLT : public 
         Base::compute(matrix);
     }
 
-    // DESTRUCTOR
     ~MumpsLDLT() override {
-        // finalize MUMPS
-        Base::mumps_execute(-2);   // -2: finalization
+        if (!Base::m_mumpsFinalized) { Base::mumpsFinalize(); }
     }
 
-    // METHOD FOR DEFINING THE MATRIX ON THE HOST PROCESS (UPPER/LOWER TRIANGULAR)
     void define_matrix(const MatrixType& matrix) override {
         Base::define_matrix(matrix.template triangularView<Options>());
     }
@@ -925,7 +813,6 @@ template <isEigenSparseMatrix MatrixType> class MumpsBLR : public MumpsBase<Mump
    protected:
     using Base = MumpsBase<MumpsBLR<MatrixType>>;
    public:
-    // CONSTRUCTORS
     MumpsBLR() : MumpsBLR(MPI_COMM_WORLD, 0, 0) { }
     explicit MumpsBLR(MPI_Comm comm) : MumpsBLR(comm, 0, 0) { }
     explicit MumpsBLR(unsigned int flags) : MumpsBLR(MPI_COMM_WORLD, flags, 0) { }
@@ -936,8 +823,8 @@ template <isEigenSparseMatrix MatrixType> class MumpsBLR : public MumpsBase<Mump
 
     MumpsBLR(MPI_Comm comm, unsigned int flags, double dropping_parameter) : Base(comm, flags) {
         fdapde_assert(!(flags & UFSC && flags & UCFS) && "UFSC and UCFS cannot be set at the same time");
+        fdapde_assert(dropping_parameter >= 0 && "Dropping parameter must be non-negative");
 
-        // initialize MUMPS
         Base::m_mumps.sym = 0;
         Base::mumps_execute(-1);   // -1: initialization
 
@@ -966,10 +853,8 @@ template <isEigenSparseMatrix MatrixType> class MumpsBLR : public MumpsBase<Mump
         Base::compute(matrix);
     }
 
-    // DESTRUCTOR
     ~MumpsBLR() override {
-        // finalize MUMPS
-        Base::mumps_execute(-2);   // -2: finalization
+        if (!Base::m_mumpsFinalized) { Base::mumpsFinalize(); }
     }
 };
 
@@ -982,13 +867,11 @@ template <isEigenSparseMatrix MatrixType> class MumpsRR : public MumpsBase<Mumps
 
     using Base::solve;
 
-    // CONSTRUCTOR
     MumpsRR() : MumpsRR(MPI_COMM_WORLD, 0) { }
     explicit MumpsRR(MPI_Comm comm) : MumpsRR(comm, 0) { }
     explicit MumpsRR(unsigned int flags) : MumpsRR(MPI_COMM_WORLD, flags) { }
 
     MumpsRR(MPI_Comm comm, unsigned int flags) : Base(comm, flags) {
-        // initialize MUMPS
         Base::m_mumps.sym = 0;
         Base::mumps_execute(-1);   // -1: initialization
 
@@ -1004,35 +887,30 @@ template <isEigenSparseMatrix MatrixType> class MumpsRR : public MumpsBase<Mumps
         Base::compute(matrix);
     }
 
-    // DESTRUCTOR
     ~MumpsRR() override {
-        // finalize MUMPS
-        Base::mumps_execute(-2);
+        if (!Base::m_mumpsFinalized) { Base::mumpsFinalize(); }
     }
 
-    // NULL SPACE SIZE METHODS
     int nullSpaceSize() {
         fdapde_assert(
           Base::m_factorizationIsOk && "The matrix must be factorized with factorize() before calling nullSpaceSize()");
         return Base::mumpsInfog()[27];
     }
 
-    // RANK METHODS
     int rank() {
         fdapde_assert(
           Base::m_factorizationIsOk && "The matrix must be factorized with factorize() before calling rank()");
         return Base::m_size - Base::mumpsInfog()[27];
     }
 
-    // NULL SPACE BASIS METHODS)
-    MatrixXd nullSpaceBasis() {
+    Matrix<Scalar, Dynamic, Dynamic> nullSpaceBasis() {
         fdapde_assert(
           Base::m_factorizationIsOk &&
           "The matrix must be factorized with factorize() before calling nullSpaceBasis()");
 
         int null_space_size_ = Base::mumpsInfog()[27];
 
-        if (null_space_size_ == 0) { return MatrixXd::Zero(Base::m_size, 0); }
+        if (null_space_size_ == 0) { return Matrix<Scalar, Dynamic, Dynamic>::Zero(Base::m_size, 0); }
 
         // allocate memory for the null space basis
         std::vector<Scalar> buff;
@@ -1051,7 +929,7 @@ template <isEigenSparseMatrix MatrixType> class MumpsRR : public MumpsBase<Mumps
         MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, Base::m_mpiComm);
 
         // --> matrix columns are the null space basis vectors
-        return Map<MatrixXd>(buff.data(), Base::m_size, null_space_size_);
+        return Map<Matrix<Scalar, Dynamic, Dynamic>>(buff.data(), Base::m_size, null_space_size_);
     }
 };
 
@@ -1062,13 +940,11 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
    public:
     using Scalar = typename Base::Scalar;
 
-    // CONSTRUCTOR
     MumpsSchur() : MumpsSchur(MPI_COMM_WORLD, 0) { }
     explicit MumpsSchur(MPI_Comm comm) : MumpsSchur(comm, 0) { }
     explicit MumpsSchur(unsigned int flags) : MumpsSchur(MPI_COMM_WORLD, flags) { }
 
     MumpsSchur(MPI_Comm comm, unsigned int flags) : Base(comm, flags), m_schurIndicesSet(false) {
-        // initialize MUMPS
         Base::m_mumps.sym = 0;
         Base::mumps_execute(-1);   // -1: initialization
 
@@ -1081,68 +957,56 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
         Base::m_mumps.nblock = 100;
     }
 
-    // [MSG for A.Palummo] Ho cambiato gli schur indices da vector a set per funzionare con la nuova interfaccia di
-    // setSchurIndices. Ho lasciato la versione con il vector commentata nel caso preferisca usare quella.
-    template <isIntSet SetType>
-    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices) :
+    template <typename Container>
+        requires isStdContainerOf<Container, int>
+    MumpsSchur(const MatrixType& matrix, const Container& schur_indices) :
         MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, 0) { }
-    template <isIntSet SetType>
-    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, MPI_Comm comm) :
+    template <typename Container>
+        requires isStdContainerOf<Container, int>
+    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, MPI_Comm comm) :
         MumpsSchur(matrix, schur_indices, comm, 0) { }
-    template <isIntSet SetType>
-    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, unsigned int flags) :
+    template <typename Container>
+        requires isStdContainerOf<Container, int>
+    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, unsigned int flags) :
         MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, flags) { }
-    template <isIntSet SetType>
-    MumpsSchur(const MatrixType& matrix, const SetType& schur_indices, MPI_Comm comm, unsigned int flags) :
+
+    template <typename Container>
+        requires isStdContainerOf<Container, int>
+    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, MPI_Comm comm, unsigned int flags) :
         MumpsSchur(comm, flags) {
         setSchurIndices(schur_indices);
         Base::compute(matrix);
     }
 
-    // MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices) :
-    //     MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, 0) { }
-    // MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, MPI_Comm comm) :
-    //     MumpsSchur(matrix, schur_indices, comm, 0) { }
-    // MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, unsigned int flags) :
-    //     MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, flags) { }
-
-    // MumpsSchur(const MatrixType& matrix, const std::vector<int>& schur_indices, MPI_Comm comm, unsigned int flags) :
-    //     MumpsSchur(comm, flags) {
-    //     setSchurIndices(schur_indices);
-    //     Base::compute(matrix);
-    // }
-
-    // DESTRUCTOR
     ~MumpsSchur() override {
-        // finalize MUMPS
-        Base::mumps_execute(-2);   // -2: finalization
+        if (!Base::m_mumpsFinalized) {
+            Base::mumpsFinalize();   // -2: finalization
+        }
     }
 
-    // [MSG for A.Palummo] Ho cambiato l'input da vector a set per evitare che l'utente possa inserire indici duplicati
-    // e per garantire che siano ordinati in modo crescente. Questo mi permette di evitare di fare controlli con assert.
-    // Devo però mantenere m_schurIndices come vector perchè ho bisogno di posizioni contigue in memmoria per mumps, che
-    // vuole come input il puntatore c al primo elemento. Le lascio la versione con il vector in input commentata se
-    // decide di voler usare quella. (i test devono essere cambiati di conseguenza, ho lasciato il codice
-    // commantato nei test nel caso si voglia usare il vector, utils già offre overloading per set e vector)
-
-    // split into template + overloading to allow any key_compare in the input set but still ensure that my function
-    // recieves the ordering i need (in this case std::less<int>)
-    // overloading of course is preferred to template if the SetType is std::set<int>
-    template <isIntSet SetType> MumpsSchur<MatrixType>& setSchurIndices(const SetType& schur_indices) {
-        std::set<int> idx(schur_indices.begin(), schur_indices.end());
-        return setSchurIndices(idx);
+    template <typename Container>
+        requires isStdContainerOf<Container, int>
+    MumpsSchur<MatrixType>& setSchurIndices(const Container& schur_indices) {
+        return setSchurIndices(schur_indices.begin(), schur_indices.end());
     }
 
-    MumpsSchur<MatrixType>& setSchurIndices(const std::set<int>& schur_indices) {
+    template <typename Iterator>
+        requires isStdIteratorOf<Iterator, int>
+    MumpsSchur<MatrixType>& setSchurIndices(Iterator begin, Iterator end) {
+        std::vector<int> schur_indices(begin, end);
+
         fdapde_assert(schur_indices.size() > 0 && "The Schur complement size must be greater than 0");
-        fdapde_assert(*schur_indices.begin() >= 0 && "The Schur indices must be positive");
+
+        std::sort(schur_indices.begin(), schur_indices.end());
+        fdapde_assert(
+          std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() &&
+          "The Schur indices must be unique");
+        fdapde_assert(schur_indices.front() >= 0 && "The Schur indices must be positive");
 
         Base::m_mumps.size_schur = schur_indices.size();
 
-        m_schurIndices.reserve(Base::m_mumps.size_schur);
-        m_schurIndices.assign(schur_indices.begin(), schur_indices.end());
+        m_schurIndices = schur_indices;
         std::for_each(m_schurIndices.begin(), m_schurIndices.end(), [](int& idx) { idx += 1; });
-
         m_schurBuff.resize(Base::m_mumps.size_schur * Base::m_mumps.size_schur);
         Base::m_mumps.listvar_schur = m_schurIndices.data();
 
@@ -1157,39 +1021,12 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
         return *this;
     }
 
-    // MumpsSchur<MatrixType>& setSchurIndices(const std::vector<int>& schur_indices) {
-    //     eigen_assert(schur_indices.size() > 0 && "The Schur complement size must be greater than 0");
-    //     eigen_assert(
-    //       std::is_sorted(schur_indices.begin(), schur_indices.end()) &&
-    //       "The Schur indices must be sorted in ascending order");
-    //     eigen_assert(
-    //       std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() &&
-    //       "The Schur indices must be unique");
-    //     eigen_assert(schur_indices.front() >= 0 && "The Schur indices must be positive");
-
-    //     Base::m_mumps.size_schur = schur_indices.size();
-
-    //     m_schurIndices = schur_indices;
-    //     std::for_each(m_schurIndices.begin(), m_schurIndices.end(), [](int& idx) { idx += 1; });
-    //     m_schurBuff.resize(Base::m_mumps.size_schur * Base::m_mumps.size_schur);
-    //     Base::m_mumps.listvar_schur = m_schurIndices.data();
-
-    //     // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
-    //     if (Base::getProcessRank() == (Base::m_mumps.par + 1) % 2) {
-    //         Base::m_mumps.schur_lld = Base::m_mumps.size_schur;
-    //         Base::m_mumps.schur = m_schurBuff.data();
-    //     }
-
-    //     m_schurIndicesSet = true;
-
-    //     return *this;
-    // }
-
-    MatrixXd complement() {
+    Matrix<Scalar, Dynamic, Dynamic> complement() {
         fdapde_assert(
           Base::m_factorizationIsOk && "The matrix must be factorized with factorize() before calling complement()");
         MPI_Bcast(m_schurBuff.data(), m_schurBuff.size(), MPI_DOUBLE, (Base::m_mumps.par + 1) % 2, Base::m_mpiComm);
-        return Map<MatrixXd>(m_schurBuff.data(), Base::m_mumps.size_schur, Base::m_mumps.size_schur);
+        return Map<Matrix<Scalar, Dynamic, Dynamic>>(
+          m_schurBuff.data(), Base::m_mumps.size_schur, Base::m_mumps.size_schur);
     }
    protected:
     void define_matrix(const MatrixType& matrix) override {
@@ -1211,6 +1048,12 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
         fdapde_assert(
           m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling analyzePattern()");
         Base::analyzePattern_impl();
+    }
+
+    void compute_impl() override {
+        fdapde_assert(
+          m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling compute()");
+        Base::compute_impl();
     }
    protected:
     std::vector<int> m_schurIndices;

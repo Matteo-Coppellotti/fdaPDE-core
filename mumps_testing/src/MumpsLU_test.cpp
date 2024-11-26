@@ -323,7 +323,8 @@ TEST(Mumps_LU, inverse_elements) {
         A_inv_expected.insert(element.row(), element.col()) = A_inv.coeff(element.row(), element.col());
     }
     EXPECT_TRUE(A_inv_test.isApprox(A_inv_expected, 1e-4));   // HIGHER TOLERANCE, im computing the inverse in 2
-                                                              // different ways, so the results are not exactly the same
+                                                              // different ways, so the results are not exactly the
+                                                              // same
 }
 
 TEST(MumpsLU_test, split_analyze_factorize_sparse) {
@@ -407,4 +408,69 @@ TEST(MumpsLU_test, type_deduction_sparse) {
     X = solver.solve(B);
     SparseMatrix<double> AX = A * X;
     EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
+}
+
+TEST(MumpsLU_test, inverse_matrix) {
+    SparseMatrix<double> A;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+
+    MumpsLU<SparseMatrix<double>> solver(A);
+    MatrixXd A_inv = solver.inverse();
+    MatrixXd I_test = A * A_inv;
+
+    for (int k = 0; k < I_test.outerSize(); ++k) {
+        for (MatrixXd::InnerIterator it(I_test, k); it; ++it) {
+            if (it.row() == it.col()) {
+                EXPECT_NEAR(it.value(), 1, DOUBLE_TOLERANCE);
+            } else {
+                EXPECT_NEAR(it.value(), 0, DOUBLE_TOLERANCE);
+            }
+        }
+    }
+}
+
+TEST(MumpsLU_test, same_sparsity_pattern) {
+    SparseMatrix<double> A;
+    SparseMatrix<double> A2;
+    Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
+    Eigen::loadMarket(A2, "../data/matrix_fullrank2.mtx");
+
+    MumpsLU<SparseMatrix<double>> solver;
+
+    solver.analyzePattern(A);
+    EXPECT_TRUE(solver.info() == Success);
+
+    solver.factorize(A);
+    EXPECT_TRUE(solver.info() == Success);
+    double det = solver.determinant();
+    EXPECT_TRUE(det != 0);
+
+    VectorXd x, b;
+    b = VectorXd::Ones(A.rows());
+    x = solver.solve(b);
+    VectorXd Ax = A * x;
+    EXPECT_TRUE(Ax.isApprox(b, DOUBLE_TOLERANCE));
+
+    MatrixXd X, B;
+    B = MatrixXd::Ones(A.rows(), 3);
+    X = solver.solve(B);
+    MatrixXd AX = A * X;
+    EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
+
+    solver.factorize(A2);
+    EXPECT_TRUE(solver.info() == Success);
+    double det2 = solver.determinant();
+    EXPECT_TRUE(det2 != 0);
+
+    VectorXd x2, b2;
+    b2 = VectorXd::Ones(A2.rows());
+    x2 = solver.solve(b2);
+    VectorXd Ax2 = A2 * x2;
+    EXPECT_TRUE(Ax2.isApprox(b2, DOUBLE_TOLERANCE));
+
+    MatrixXd X2, B2;
+    B2 = MatrixXd::Ones(A2.rows(), 3);
+    X2 = solver.solve(B2);
+    MatrixXd AX2 = A2 * X2;
+    EXPECT_TRUE(AX2.isApprox(B2, DOUBLE_TOLERANCE));
 }

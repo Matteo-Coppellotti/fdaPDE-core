@@ -33,6 +33,16 @@ inline void randomInvIndices(std::vector<std::pair<int, int>>& vec, int rows){
     std::set<std::pair<int, int>> set;
     randomInvIndices(set, rows);
     vec.assign(set.begin(), set.end());
+
+    // scrambe the vector
+    std::mt19937 gen;
+    if (Seeded) {
+        gen.seed(Seed);
+    } else {
+        std::random_device rd;
+        gen.seed(rd());
+    }
+    std::shuffle(vec.begin(), vec.end(), gen);
 }
 
 inline void randomSchurIndices(std::set<int>& set, int rows) {
@@ -60,6 +70,16 @@ inline void randomSchurIndices(std::vector<int>& vec, int rows){
     std::set<int> set;
     randomSchurIndices(set, rows);
     vec.assign(set.begin(), set.end());
+
+    // scrambe the vector
+    std::mt19937 gen;
+    if (Seeded) {
+        gen.seed(Seed);
+    } else {
+        std::random_device rd;
+        gen.seed(rd());
+    }
+    std::shuffle(vec.begin(), vec.end(), gen);
 }
 
 #endif   // RAND_INDICES_H

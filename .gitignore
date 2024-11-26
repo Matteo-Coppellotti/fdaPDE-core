@@ -22,7 +22,6 @@ mumps_testing/test_output.log
 !mumps_testing/user_config.cmake
 !mumps_testing/data/CMakeLists.txt
 
-
 build/
 CMakeFiles/
 .DS_Store

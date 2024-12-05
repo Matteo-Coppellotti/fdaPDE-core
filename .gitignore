@@ -18,10 +18,6 @@ mumps_testing/build/
 mumps_testing/data/build/
 mumps_testing/test_output.log
 
-!mumps_testing/CMakeLists.txt
-!mumps_testing/user_config.cmake
-!mumps_testing/data/CMakeLists.txt
-
 build/
 CMakeFiles/
 .DS_Store
@@ -47,10 +43,11 @@ experiments/test_RSVD/performances.csv
 #some test directories
 experiments/
 
-mumps_testing/mumps_fdapde_test
-mumps_testing/.cache
-mumps_testing/build/
+
 !mumps_testing/CMakeLists.txt
 !mumps_testing/user_config.cmake
-!mumps_texsting/data/CMakeLists.txt
-
+!mumps_testing/data/CMakeLists.txt
+!mumps_testing/computation_times/
+!mumps_testing/computation_times/**
+mumps_testing/computation_times/build/
+mumps_testing/computation_times/build/**

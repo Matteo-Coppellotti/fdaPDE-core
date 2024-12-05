@@ -12,7 +12,7 @@ SparseMatrix<double> generateSparseSPD(int size, double density, std::mt19937& g
 
     // Fill upper triangle of the matrix
     std::vector<Triplet<double>> tripletList;
-    int nnz = static_cast<int>(density * size * size);   // Approximate non-zeros
+    int nnz = static_cast<int>(density * size * size / 2);   // Approximate non-zeros
     for (int k = 0; k < nnz; ++k) {
         int i = gen() % size;
         int j = gen() % size;
@@ -72,11 +72,12 @@ SparseMatrix<double> generateSparseRankDeficient(int size, double density, std::
     }
     A.setFromTriplets(tripletList.begin(), tripletList.end());
 
-    // set a random number of rows to ones
-    int num_rows = gen() % size;
-    for (int i = 0; i < num_rows; ++i) {
-        int row = gen() % size;
-        for (int j = 0; j < size; ++j) { A.coeffRef(row, j) = 1.0; }
+    // set a random number of rows to be equal to the first one
+    int num_rows = 2 + gen() % (size /2);
+    for (int n = 0; n < num_rows; ++n) {
+        for (int i = 0; i < size; ++i) {
+            A.coeffRef(n, i) = 1;
+        }
     }
 
     return A;
@@ -120,8 +121,8 @@ void saveMatrixMarket(SparseMatrix<double>& A, const std::string& filename) {
 }
 
 int main(int argc, char* argv[]) {
-    int size = 1000;         // Matrix dimension
-    double density = 0.01;   // Density of the sparse matrix
+    int size = 100;          // Matrix dimension
+    double density = 0.1;   // Density of the sparse matrix
 
     std::mt19937 gen;
     if (argc > 1) {

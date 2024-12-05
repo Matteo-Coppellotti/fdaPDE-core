@@ -5,67 +5,11 @@
 
 using namespace fdapde;
 
-// std::tuple<Eigen::Matrix<double, Dynamic, Dynamic>, Eigen::Matrix<int, Dynamic, Dynamic>, Eigen::Matrix<int, Dynamic, Dynamic>> generate_unit_square_mesh(int N) {
-//     Eigen::Matrix<double, Dynamic, Dynamic> nodes(2, (N + 1) * (N + 1));
-//     Eigen::Matrix<int, Dynamic, Dynamic> cells(3, 2 * N * N);
-//     Eigen::Matrix<int, Dynamic, Dynamic> boundary(2, 4 * N);
-
-//     double h = 1.0 / N;
-//     int node_id = 0;
-//     for (int j = 0; j <= N; ++j) {
-//         for (int i = 0; i <= N; ++i) {
-//             nodes(0, node_id) = i * h;
-//             nodes(1, node_id) = j * h;
-//             node_id++;
-//         }
-//     }
-
-//     int cell_id = 0;
-
-//     for (int j = 0; j < N; ++j) {
-//         for (int i = 0; i < N; ++i) {
-//             cells(0, cell_id) = i + j * (N + 1);
-//             cells(1, cell_id) = i + 1 + j * (N + 1);
-//             cells(2, cell_id) = i + 1 + (j + 1) * (N + 1);
-//             cell_id++;
-
-//             cells(0, cell_id) = i + j * (N + 1);
-//             cells(1, cell_id) = i + 1 + (j + 1) * (N + 1);
-//             cells(2, cell_id) = i + (j + 1) * (N + 1);
-//             cell_id++;
-//         }
-//     }
-
-//     int boundary_id = 0;
-
-//     for (int i = 0; i < N; ++i) {
-//         boundary(0, boundary_id) = i;
-//         boundary(1, boundary_id) = i + 1;
-//         boundary_id++;
-
-//         boundary(0, boundary_id) = i + N * (N + 1);
-//         boundary(1, boundary_id) = i + 1 + N * (N + 1);
-//         boundary_id++;
-
-//         boundary(0, boundary_id) = i * (N + 1);
-//         boundary(1, boundary_id) = (i + 1) * (N + 1);
-//         boundary_id++;
-
-//         boundary(0, boundary_id) = i + N * (N + 1);
-//         boundary(1, boundary_id) = i + (N - 1) * (N + 1);
-//         boundary_id++;
-//     }
-    
-//     return {nodes, cells, boundary};
-// }
-
 int main() {
-    // int N = 10;
 
     Eigen::Matrix<double, Dynamic, Dynamic> nodes = read_csv<double>("../../../test/mesh/unit_square/points.csv").as_matrix();
     Eigen::Matrix<int, Dynamic, Dynamic> cells    = read_csv<int>("../../../test/mesh/unit_square/elements.csv").as_matrix();
     Eigen::Matrix<int, Dynamic, Dynamic> boundary = read_csv<int>("../../../test/mesh/unit_square/boundary.csv").as_matrix();
-    // [nodes, cells, boundary] = generate_unit_square_mesh(N);
 
     Triangulation</* tangent_space = */ 2, /* embedding_space = */ 2> unit_square(nodes, cells, boundary); // need to generate square mesh
 

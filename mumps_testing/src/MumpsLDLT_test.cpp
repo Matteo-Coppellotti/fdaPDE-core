@@ -459,3 +459,77 @@ TEST(MumpsLDLT_test, type_deduction_sparse) {
     SparseMatrix<double> AX = A * X;
     EXPECT_TRUE(AX.isApprox(B, DOUBLE_TOLERANCE));
 }
+
+
+TEST(MumpsLDLT_test, colmajor_vs_rowmajor_sparse) {
+    SparseMatrix<double> A_colmajor;
+    SparseMatrix<double, RowMajor> A_rowmajor;
+    Eigen::loadMarket(A_colmajor, "../data/matrix_spd.mtx");
+    Eigen::loadMarket(A_rowmajor, "../data/matrix_spd.mtx");
+
+    MumpsLDLT solver_colmajor(A_colmajor);
+    MumpsLDLT solver_rowmajor(A_rowmajor);
+
+    EXPECT_TRUE(solver_colmajor.info() == Success);
+    EXPECT_TRUE(solver_rowmajor.info() == Success);
+    EXPECT_TRUE(solver_colmajor.rows() == A_colmajor.rows());
+    EXPECT_TRUE(solver_rowmajor.rows() == A_rowmajor.rows());
+    EXPECT_TRUE(solver_colmajor.cols() == A_colmajor.cols());
+    EXPECT_TRUE(solver_rowmajor.cols() == A_rowmajor.cols());
+    double det_colmajor = solver_colmajor.determinant();
+    double det_rowmajor = solver_rowmajor.determinant();
+    EXPECT_TRUE(det_colmajor != 0);
+    EXPECT_TRUE(det_rowmajor != 0);
+
+    SparseVector<double> x_colmajor, x_rowmajor, b;
+    b = VectorXd::Ones(A_colmajor.rows()).sparseView();
+    x_colmajor = solver_colmajor.solve(b);
+    x_rowmajor = solver_rowmajor.solve(b);
+    SparseVector<double> Ax_colmajor = A_colmajor * x_colmajor;
+    SparseVector<double> Ax_rowmajor = A_rowmajor * x_rowmajor;
+    EXPECT_TRUE(Ax_colmajor.isApprox(b, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(Ax_rowmajor.isApprox(b, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(x_colmajor.isApprox(x_rowmajor, DOUBLE_TOLERANCE));
+
+    SparseMatrix<double> X_colmajor_colcol, X_colmajor_rowrow, X_colmajor_colrow, X_colmajor_rowcol,
+      B_colmajor;
+    SparseMatrix<double, RowMajor> X_rowmajor_colcol, X_rowmajor_rowrow, X_rowmajor_colrow,
+      X_rowmajor_rowcol, B_rowmajor;
+    B_colmajor = MatrixXd::Ones(A_colmajor.rows(), 3).sparseView();
+    B_rowmajor = MatrixXd::Ones(A_rowmajor.rows(), 3).sparseView();
+    X_colmajor_colcol = solver_colmajor.solve(B_colmajor);
+    X_colmajor_rowrow = solver_rowmajor.solve(B_rowmajor);
+    X_colmajor_colrow = solver_colmajor.solve(B_rowmajor);
+    X_colmajor_rowcol = solver_rowmajor.solve(B_colmajor);
+    X_rowmajor_colcol = solver_colmajor.solve(B_colmajor);
+    X_rowmajor_rowrow = solver_rowmajor.solve(B_rowmajor);
+    X_rowmajor_colrow = solver_colmajor.solve(B_rowmajor);
+    X_rowmajor_rowcol = solver_rowmajor.solve(B_colmajor);
+    SparseMatrix<double> AX_colmajor_colcol = A_colmajor * X_colmajor_colcol;
+    SparseMatrix<double> AX_colmajor_rowrow = A_colmajor * X_colmajor_rowrow;
+    SparseMatrix<double> AX_colmajor_colrow = A_colmajor * X_colmajor_colrow;
+    SparseMatrix<double> AX_colmajor_rowcol = A_colmajor * X_colmajor_rowcol;
+    SparseMatrix<double, RowMajor> AX_rowmajor_colcol = A_rowmajor * X_rowmajor_colcol;
+    SparseMatrix<double, RowMajor> AX_rowmajor_rowrow = A_rowmajor * X_rowmajor_rowrow;
+    SparseMatrix<double, RowMajor> AX_rowmajor_colrow = A_rowmajor * X_rowmajor_colrow;
+    SparseMatrix<double, RowMajor> AX_rowmajor_rowcol = A_rowmajor * X_rowmajor_rowcol;
+
+    EXPECT_TRUE(AX_colmajor_colcol.isApprox(B_colmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_colmajor_rowrow.isApprox(B_rowmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_colmajor_colrow.isApprox(B_rowmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_colmajor_rowcol.isApprox(B_colmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_rowmajor_colcol.isApprox(B_colmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_rowmajor_rowrow.isApprox(B_rowmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_rowmajor_colrow.isApprox(B_rowmajor, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(AX_rowmajor_rowcol.isApprox(B_colmajor, DOUBLE_TOLERANCE));
+
+    EXPECT_TRUE(X_colmajor_colcol.isApprox(X_colmajor_colrow, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_colmajor_colrow.isApprox(X_colmajor_rowcol, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_colmajor_rowcol.isApprox(X_colmajor_rowrow, DOUBLE_TOLERANCE));
+
+    EXPECT_TRUE(X_rowmajor_colcol.isApprox(X_rowmajor_colrow, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_rowmajor_colrow.isApprox(X_rowmajor_rowcol, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_rowmajor_rowcol.isApprox(X_rowmajor_rowrow, DOUBLE_TOLERANCE));
+
+    EXPECT_TRUE(X_colmajor_colcol.isApprox(X_rowmajor_colcol, DOUBLE_TOLERANCE));
+}

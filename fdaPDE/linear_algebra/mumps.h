@@ -221,10 +221,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     }
 
     template <typename BDerived, typename XDerived>
-        requires(requires(BDerived b, XDerived x) {
-            { x.derived().resizeLike(b) };
-        })
-    void _solve_impl(const MatrixBase<BDerived>& b, MatrixBase<XDerived>& x) const {
+    void _solve_impl(const DenseBase<BDerived>& b, DenseBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
 
         if (b.derived().data() == x.derived().data()) {   // inplace solve
@@ -253,8 +250,10 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         MPI_Bcast(x.derived().data(), x.size(), MPI_DOUBLE, 0, m_mpiComm);
     }
 
+    // the following method implements sparse to sparse (keep in mind that it is possible to assign a sparse matrix to a
+    // dense one, so this method will work for sparse to dense as well)
     template <typename BDerived, typename XDerived>
-    void _solve_impl(const SparseMatrix<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
+    void _solve_impl(const SparseMatrixBase<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
 
         SparseMatrix<Scalar, ColMajor> loc_b;
@@ -265,7 +264,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         std::vector<StorageIndex> irhs_sparse;   // Stores the row indices of the nonzeros like outerIndexPtr does, but
                                                  // requires 1-based indexing
 
-        Matrix<Scalar, Dynamic, Dynamic, ColMajor> rhs(b.rows(), b.cols());
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> res(b.rows(), b.cols());
 
         if (getProcessRank() == 0) {
             loc_b = b;   // I save a local copy because I need the matrix in compressed format in order for the accesses
@@ -290,17 +289,24 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
             m_mumps.rhs_sparse = loc_b.valuePtr();
             m_mumps.irhs_sparse = irhs_sparse.data();
             m_mumps.irhs_ptr = irhs_ptr.data();
-            m_mumps.rhs = const_cast<Scalar*>(rhs.data());
+            m_mumps.rhs = const_cast<Scalar*>(res.data());
         }
 
         m_mumps.icntl[19] = 1;   // 1: sparse right-hand side
         mumps_execute(3);
         m_mumps.icntl[19] = 0;   // reset to default
 
-        MPI_Bcast(rhs.data(), rhs.size(), MPI_DOUBLE, 0, m_mpiComm);
+        MPI_Bcast(res.data(), res.size(), MPI_DOUBLE, 0, m_mpiComm);
 
-        x = rhs.sparseView();   // Unfortunately Mumps only outputs the solution in dense format, i need to make it
-                                // sparse to adhere to Solve.h (only Dense2Dense or Sparse2Sparse are allowed)
+        // Unfortunately Mumps only outputs the solution in dense format, i need to make sparse to adhere to Solve.h
+        // (only Dense2Dense or Sparse2Sparse are allowed)
+        if (XDerived::Flags & RowMajorBit) {
+            SparseMatrix<Scalar, RowMajor> loc_x;
+            loc_x = res.sparseView();
+            x = loc_x;
+        } else {
+            x = res.sparseView();
+        }
     }
 
     // template <typename BDerived, typename XDerived>

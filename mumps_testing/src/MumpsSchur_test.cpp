@@ -373,3 +373,70 @@ TEST(MumpsSchur_test, type_deduction_sparse) {
     B = MatrixXd::Ones(A.rows(), 3).sparseView();
     X = solver.solve(B);
 }
+
+TEST(MumpsSchur_test, colmajor_vs_rowmajor_sparse) {
+    SparseMatrix<double> A_colmajor;
+    SparseMatrix<double, RowMajor> A_rowmajor;
+    Eigen::loadMarket(A_colmajor, "../data/matrix_fullrank.mtx");
+    Eigen::loadMarket(A_rowmajor, "../data/matrix_fullrank.mtx");
+
+    MumpsSchur solver_colmajor(A_colmajor, schur_size);
+    MumpsSchur solver_rowmajor(A_rowmajor, schur_size);
+
+    EXPECT_TRUE(solver_colmajor.info() == Success);
+    EXPECT_TRUE(solver_rowmajor.info() == Success);
+    EXPECT_TRUE(solver_colmajor.rows() == A_colmajor.rows());
+    EXPECT_TRUE(solver_rowmajor.rows() == A_rowmajor.rows());
+    EXPECT_TRUE(solver_colmajor.cols() == A_colmajor.cols());
+    EXPECT_TRUE(solver_rowmajor.cols() == A_rowmajor.cols());
+    double det_colmajor = solver_colmajor.determinant();
+    double det_rowmajor = solver_rowmajor.determinant();
+    EXPECT_TRUE(det_colmajor != 0);
+    EXPECT_TRUE(det_rowmajor != 0);
+
+    SparseVector<double> x_colmajor, x_rowmajor, b;
+    b = VectorXd::Ones(A_colmajor.rows()).sparseView();
+    x_colmajor = solver_colmajor.solve(b);
+    x_rowmajor = solver_rowmajor.solve(b);
+    EXPECT_TRUE(x_colmajor.isApprox(x_rowmajor, DOUBLE_TOLERANCE));
+
+    SparseMatrix<double> X_colmajor_colcol, X_colmajor_rowrow, X_colmajor_colrow, X_colmajor_rowcol, B_colmajor;
+    SparseMatrix<double, RowMajor> X_rowmajor_colcol, X_rowmajor_rowrow, X_rowmajor_colrow, X_rowmajor_rowcol,
+      B_rowmajor;
+    B_colmajor = MatrixXd::Ones(A_colmajor.rows(), 3).sparseView();
+    B_rowmajor = MatrixXd::Ones(A_rowmajor.rows(), 3).sparseView();
+    X_colmajor_colcol = solver_colmajor.solve(B_colmajor);
+    X_colmajor_rowrow = solver_rowmajor.solve(B_rowmajor);
+    X_colmajor_colrow = solver_colmajor.solve(B_rowmajor);
+    X_colmajor_rowcol = solver_rowmajor.solve(B_colmajor);
+    X_rowmajor_colcol = solver_colmajor.solve(B_colmajor);
+    X_rowmajor_rowrow = solver_rowmajor.solve(B_rowmajor);
+    X_rowmajor_colrow = solver_colmajor.solve(B_rowmajor);
+    X_rowmajor_rowcol = solver_rowmajor.solve(B_colmajor);
+
+    EXPECT_TRUE(X_colmajor_colcol.isApprox(X_colmajor_colrow, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_colmajor_colrow.isApprox(X_colmajor_rowcol, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_colmajor_rowcol.isApprox(X_colmajor_rowrow, DOUBLE_TOLERANCE));
+
+    EXPECT_TRUE(X_rowmajor_colcol.isApprox(X_rowmajor_colrow, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_rowmajor_colrow.isApprox(X_rowmajor_rowcol, DOUBLE_TOLERANCE));
+    EXPECT_TRUE(X_rowmajor_rowcol.isApprox(X_rowmajor_rowrow, DOUBLE_TOLERANCE));
+
+    EXPECT_TRUE(X_colmajor_colcol.isApprox(X_rowmajor_colcol, DOUBLE_TOLERANCE));
+
+    Matrix<double, Dynamic, Dynamic> complement_colmajor_col = solver_colmajor.complement();
+    Matrix<double, Dynamic, Dynamic> complement_colmajor_row = solver_rowmajor.complement();
+    EXPECT_TRUE(complement_colmajor_col.rows() == schur_size);
+    EXPECT_TRUE(complement_colmajor_col.cols() == schur_size);
+    EXPECT_TRUE(complement_colmajor_row.rows() == schur_size);
+    EXPECT_TRUE(complement_colmajor_row.cols() == schur_size);
+    EXPECT_TRUE(complement_colmajor_col.isApprox(complement_colmajor_row, DOUBLE_TOLERANCE));
+
+    Matrix<double, Dynamic, Dynamic, RowMajor> complement_rowmajor_col = solver_colmajor.complement();
+    Matrix<double, Dynamic, Dynamic, RowMajor> complement_rowmajor_row = solver_rowmajor.complement();
+    EXPECT_TRUE(complement_rowmajor_col.rows() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_col.cols() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_row.rows() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_row.cols() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_col.isApprox(complement_rowmajor_row, DOUBLE_TOLERANCE));
+}

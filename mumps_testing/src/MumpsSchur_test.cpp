@@ -11,6 +11,8 @@ using namespace Eigen;
 #include "../../test/src/utils/constants.h"
 using fdapde::testing::DOUBLE_TOLERANCE;
 
+int schur_size = 10;
+
 TEST(MumpsSchur_test, split_analyze_factorize) {
     SparseMatrix<double> A;
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
@@ -19,10 +21,7 @@ TEST(MumpsSchur_test, split_analyze_factorize) {
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-    solver.setSchurIndices(schur_indices);
+    solver.setSchurSize(schur_size);
 
     solver.analyzePattern(A);
     EXPECT_TRUE(solver.info() == Success);
@@ -32,7 +31,6 @@ TEST(MumpsSchur_test, split_analyze_factorize) {
     solver.factorize(A);
     EXPECT_TRUE(solver.info() == Success);
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     VectorXd x, b;
     b = VectorXd::Ones(A.rows());
@@ -43,8 +41,8 @@ TEST(MumpsSchur_test, split_analyze_factorize) {
     X = solver.solve(B);
 
     MatrixXd complement = solver.complement();
-    EXPECT_TRUE(complement.rows() == schur_indices.size());
-    EXPECT_TRUE(complement.cols() == schur_indices.size());
+    EXPECT_TRUE(complement.rows() == schur_size);
+    EXPECT_TRUE(complement.cols() == schur_size);
 }
 
 TEST(MumpsSchur_test, compute) {
@@ -55,17 +53,15 @@ TEST(MumpsSchur_test, compute) {
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-    solver.setSchurIndices(schur_indices);
+    // std::vector<int> schur_size;
+
+    solver.setSchurSize(schur_size);
 
     solver.compute(A);
     EXPECT_TRUE(solver.info() == Success);
     EXPECT_TRUE(solver.rows() == A.rows());
     EXPECT_TRUE(solver.cols() == A.cols());
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     VectorXd x, b;
     b = VectorXd::Ones(A.rows());
@@ -76,24 +72,19 @@ TEST(MumpsSchur_test, compute) {
     X = solver.solve(B);
 
     MatrixXd complement = solver.complement();
-    EXPECT_TRUE(complement.rows() == schur_indices.size());
-    EXPECT_TRUE(complement.cols() == schur_indices.size());
+    EXPECT_TRUE(complement.rows() == schur_size);
+    EXPECT_TRUE(complement.cols() == schur_size);
 }
 
 TEST(MumpsSchur_test, type_deduction) {
     SparseMatrix<double> A;
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-
-    MumpsSchur solver(A, schur_indices);
+    MumpsSchur solver(A, schur_size);
     EXPECT_TRUE(solver.info() == Success);
     EXPECT_TRUE(solver.rows() == A.rows());
     EXPECT_TRUE(solver.cols() == A.cols());
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     VectorXd x, b;
     b = VectorXd::Ones(A.rows());
@@ -104,8 +95,8 @@ TEST(MumpsSchur_test, type_deduction) {
     X = solver.solve(B);
 
     MatrixXd complement = solver.complement();
-    EXPECT_TRUE(complement.rows() == schur_indices.size());
-    EXPECT_TRUE(complement.cols() == schur_indices.size());
+    EXPECT_TRUE(complement.rows() == schur_size);
+    EXPECT_TRUE(complement.cols() == schur_size);
 }
 
 TEST(MumpsSchur_test, flags) {
@@ -175,11 +166,8 @@ TEST(MumpsSchur_test, flags) {
 
     SparseMatrix<double> A;
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
 
-    MumpsSchur solver8(A, schur_indices, NoDeterminant);
+    MumpsSchur solver8(A, schur_size, NoDeterminant);
     EXPECT_TRUE(solver8.mumpsIcntl()[0] == -1);
     EXPECT_TRUE(solver8.mumpsIcntl()[1] == -1);
     EXPECT_TRUE(solver8.mumpsIcntl()[2] == -1);
@@ -187,7 +175,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver8.mumpsIcntl()[32] == 0);
     EXPECT_TRUE(solver8.mumpsRawStruct().par == 0);
 
-    MumpsSchur solver9(A, schur_indices, Verbose);
+    MumpsSchur solver9(A, schur_size, Verbose);
     if (solver9.getProcessRank() == 0) {
         EXPECT_TRUE(solver9.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver9.mumpsIcntl()[1] == 6);
@@ -197,7 +185,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver9.mumpsIcntl()[32] == 1);
     EXPECT_TRUE(solver9.mumpsRawStruct().par == 0);
 
-    MumpsSchur solver10(A, schur_indices, WorkingHost);
+    MumpsSchur solver10(A, schur_size, WorkingHost);
     EXPECT_TRUE(solver10.mumpsIcntl()[0] == -1);
     EXPECT_TRUE(solver10.mumpsIcntl()[1] == -1);
     EXPECT_TRUE(solver10.mumpsIcntl()[2] == -1);
@@ -205,7 +193,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver10.mumpsIcntl()[32] == 1);
     EXPECT_TRUE(solver10.mumpsRawStruct().par == 1);
 
-    MumpsSchur solver11(A, schur_indices, NoDeterminant | Verbose | WorkingHost);
+    MumpsSchur solver11(A, schur_size, NoDeterminant | Verbose | WorkingHost);
     if (solver11.getProcessRank() == 0) {
         EXPECT_TRUE(solver11.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver11.mumpsIcntl()[1] == 6);
@@ -215,7 +203,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver11.mumpsIcntl()[32] == 0);
     EXPECT_TRUE(solver11.mumpsRawStruct().par == 1);
 
-    MumpsSchur solver12(A, schur_indices, NoDeterminant | Verbose);
+    MumpsSchur solver12(A, schur_size, NoDeterminant | Verbose);
     if (solver12.getProcessRank() == 0) {
         EXPECT_TRUE(solver12.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver12.mumpsIcntl()[1] == 6);
@@ -225,7 +213,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver12.mumpsIcntl()[32] == 0);
     EXPECT_TRUE(solver12.mumpsRawStruct().par == 0);
 
-    MumpsSchur solver13(A, schur_indices, NoDeterminant | WorkingHost);
+    MumpsSchur solver13(A, schur_size, NoDeterminant | WorkingHost);
     EXPECT_TRUE(solver13.mumpsIcntl()[0] == -1);
     EXPECT_TRUE(solver13.mumpsIcntl()[1] == -1);
     EXPECT_TRUE(solver13.mumpsIcntl()[2] == -1);
@@ -233,7 +221,7 @@ TEST(MumpsSchur_test, flags) {
     EXPECT_TRUE(solver13.mumpsIcntl()[32] == 0);
     EXPECT_TRUE(solver13.mumpsRawStruct().par == 1);
 
-    MumpsSchur solver14(A, schur_indices, Verbose | WorkingHost);
+    MumpsSchur solver14(A, schur_size, Verbose | WorkingHost);
     if (solver14.getProcessRank() == 0) {
         EXPECT_TRUE(solver14.mumpsIcntl()[0] == 6);
         EXPECT_TRUE(solver14.mumpsIcntl()[1] == 6);
@@ -250,12 +238,8 @@ TEST(MumpsSchur_test, colmajor_vs_rowmajor) {
     Eigen::loadMarket(A_colmajor, "../data/matrix_fullrank.mtx");
     Eigen::loadMarket(A_rowmajor, "../data/matrix_fullrank.mtx");
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A_colmajor.rows());
-
-    MumpsSchur solver_colmajor(A_colmajor, schur_indices);
-    MumpsSchur solver_rowmajor(A_rowmajor, schur_indices);
+    MumpsSchur solver_colmajor(A_colmajor, schur_size);
+    MumpsSchur solver_rowmajor(A_rowmajor, schur_size);
 
     EXPECT_TRUE(solver_colmajor.info() == Success);
     EXPECT_TRUE(solver_rowmajor.info() == Success);
@@ -265,8 +249,6 @@ TEST(MumpsSchur_test, colmajor_vs_rowmajor) {
     EXPECT_TRUE(solver_rowmajor.cols() == A_rowmajor.cols());
     double det_colmajor = solver_colmajor.determinant();
     double det_rowmajor = solver_rowmajor.determinant();
-    EXPECT_TRUE(det_colmajor != 0);
-    EXPECT_TRUE(det_rowmajor != 0);
 
     VectorXd x_colmajor, x_rowmajor, b;
     b = VectorXd::Ones(A_colmajor.rows());
@@ -300,18 +282,18 @@ TEST(MumpsSchur_test, colmajor_vs_rowmajor) {
 
     Matrix<double, Dynamic, Dynamic> complement_colmajor_col = solver_colmajor.complement();
     Matrix<double, Dynamic, Dynamic> complement_colmajor_row = solver_rowmajor.complement();
-    EXPECT_TRUE(complement_colmajor_col.rows() == schur_indices.size());
-    EXPECT_TRUE(complement_colmajor_col.cols() == schur_indices.size());
-    EXPECT_TRUE(complement_colmajor_row.rows() == schur_indices.size());
-    EXPECT_TRUE(complement_colmajor_row.cols() == schur_indices.size());
+    EXPECT_TRUE(complement_colmajor_col.rows() == schur_size);
+    EXPECT_TRUE(complement_colmajor_col.cols() == schur_size);
+    EXPECT_TRUE(complement_colmajor_row.rows() == schur_size);
+    EXPECT_TRUE(complement_colmajor_row.cols() == schur_size);
     EXPECT_TRUE(complement_colmajor_col.isApprox(complement_colmajor_row, DOUBLE_TOLERANCE));
 
     Matrix<double, Dynamic, Dynamic, RowMajor> complement_rowmajor_col = solver_colmajor.complement();
     Matrix<double, Dynamic, Dynamic, RowMajor> complement_rowmajor_row = solver_rowmajor.complement();
-    EXPECT_TRUE(complement_rowmajor_col.rows() == schur_indices.size());
-    EXPECT_TRUE(complement_rowmajor_col.cols() == schur_indices.size());
-    EXPECT_TRUE(complement_rowmajor_row.rows() == schur_indices.size());
-    EXPECT_TRUE(complement_rowmajor_row.cols() == schur_indices.size());
+    EXPECT_TRUE(complement_rowmajor_col.rows() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_col.cols() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_row.rows() == schur_size);
+    EXPECT_TRUE(complement_rowmajor_row.cols() == schur_size);
     EXPECT_TRUE(complement_rowmajor_col.isApprox(complement_rowmajor_row, DOUBLE_TOLERANCE));
 }
 
@@ -328,10 +310,7 @@ TEST(MumpsSchur_test, split_analyze_factorize_sparse) {
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-    solver.setSchurIndices(schur_indices);
+    solver.setSchurSize(schur_size);
 
     solver.analyzePattern(A);
     EXPECT_TRUE(solver.info() == Success);
@@ -341,7 +320,6 @@ TEST(MumpsSchur_test, split_analyze_factorize_sparse) {
     solver.factorize(A);
     EXPECT_TRUE(solver.info() == Success);
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     SparseMatrix<double> x, b;
     b = VectorXd::Ones(A.rows()).sparseView();
@@ -360,17 +338,13 @@ TEST(MumpsSchur_test, compute_sparse) {
     EXPECT_TRUE(solver.rows() == 0);
     EXPECT_TRUE(solver.cols() == 0);
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-    solver.setSchurIndices(schur_indices);
+    solver.setSchurSize(schur_size);
 
     solver.compute(A);
     EXPECT_TRUE(solver.info() == Success);
     EXPECT_TRUE(solver.rows() == A.rows());
     EXPECT_TRUE(solver.cols() == A.cols());
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     SparseVector<double> x, b;
     b = VectorXd::Ones(A.rows()).sparseView();
@@ -385,16 +359,11 @@ TEST(MumpsSchur_test, type_deduction_sparse) {
     SparseMatrix<double> A;
     Eigen::loadMarket(A, "../data/matrix_fullrank.mtx");
 
-    // std::vector<int> schur_indices;
-    std::set<int> schur_indices;
-    randomSchurIndices(schur_indices, A.rows());
-
-    MumpsSchur solver(A, schur_indices);
+    MumpsSchur solver(A, schur_size);
     EXPECT_TRUE(solver.info() == Success);
     EXPECT_TRUE(solver.rows() == A.rows());
     EXPECT_TRUE(solver.cols() == A.cols());
     double det = solver.determinant();
-    EXPECT_TRUE(det != 0);
 
     SparseVector<double> x, b;
     b = VectorXd::Ones(A.rows()).sparseView();

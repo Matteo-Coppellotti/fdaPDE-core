@@ -30,7 +30,7 @@ concept isStdContainerOf = requires(Container c) {
     { c.begin() } -> std::input_iterator;
     { c.end() } -> std::input_iterator;
     { c.size() } -> std::integral;
-} && std::is_same_v<typename Container::value_type, T> || std::same_as<Container, std::initializer_list<T>>;
+} && std::is_same_v<typename Container::value_type, T>;
 
 template <typename Iterator, typename T>
 concept isStdIteratorOf =
@@ -322,9 +322,9 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     Scalar determinant() {
         fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
         fdapde_assert(
-          m_factorizationIsOk && "The matrix must be factoried with factorize_impl() before calling determinant()");
+          m_factorizationIsOk && "The matrix must be factoried with factorize() before calling determinant()");
         return mumpsRinfog()[11] *
-               std::pow(2, mumpsInfog()[33]);   // Keep in mind that if infog[33] is very high std::pow will return inf
+               std::pow(2, mumpsInfog()[33]);   // Keep in mind that if infog[33] is very high, std::pow will return inf
     }
 
     template <typename Container>
@@ -659,7 +659,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_factorizationIsOk = false;
     }
 
-    void factorize_impl() {
+    virtual void factorize_impl() {
         fdapde_assert(m_analysisIsOk && "The matrix must be analyzed with analyzePattern() before calling factorize()");
         m_info = NumericalIssue;
         mumps_execute(2);   // 2: factorize
@@ -944,7 +944,7 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
     explicit MumpsSchur(MPI_Comm comm) : MumpsSchur(comm, 0) { }
     explicit MumpsSchur(unsigned int flags) : MumpsSchur(MPI_COMM_WORLD, flags) { }
 
-    MumpsSchur(MPI_Comm comm, unsigned int flags) : Base(comm, flags), m_schurIndicesSet(false) {
+    MumpsSchur(MPI_Comm comm, unsigned int flags) : Base(comm, flags), m_schurSizeSet(false) {
         Base::m_mumps.sym = 0;
         Base::mumps_execute(-1);   // -1: initialization
 
@@ -957,24 +957,12 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
         Base::m_mumps.nblock = 100;
     }
 
-    template <typename Container>
-        requires isStdContainerOf<Container, int>
-    MumpsSchur(const MatrixType& matrix, const Container& schur_indices) :
-        MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, 0) { }
-    template <typename Container>
-        requires isStdContainerOf<Container, int>
-    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, MPI_Comm comm) :
-        MumpsSchur(matrix, schur_indices, comm, 0) { }
-    template <typename Container>
-        requires isStdContainerOf<Container, int>
-    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, unsigned int flags) :
-        MumpsSchur(matrix, schur_indices, MPI_COMM_WORLD, flags) { }
-
-    template <typename Container>
-        requires isStdContainerOf<Container, int>
-    MumpsSchur(const MatrixType& matrix, const Container& schur_indices, MPI_Comm comm, unsigned int flags) :
-        MumpsSchur(comm, flags) {
-        setSchurIndices(schur_indices);
+    MumpsSchur(const MatrixType& matrix, int schur_size) : MumpsSchur(matrix, schur_size, MPI_COMM_WORLD, 0) { }
+    MumpsSchur(const MatrixType& matrix, int schur_size, MPI_Comm comm) : MumpsSchur(matrix, schur_size, comm, 0) { }
+    MumpsSchur(const MatrixType& matrix, int schur_size, unsigned int flags) :
+        MumpsSchur(matrix, schur_size, MPI_COMM_WORLD, flags) { }
+    MumpsSchur(const MatrixType& matrix, int schur_size, MPI_Comm comm, unsigned int flags) : MumpsSchur(comm, flags) {
+        setSchurSize(schur_size);
         Base::compute(matrix);
     }
 
@@ -984,82 +972,60 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
         }
     }
 
-    template <typename Container>
-        requires isStdContainerOf<Container, int>
-    MumpsSchur<MatrixType>& setSchurIndices(const Container& schur_indices) {
-        return setSchurIndices(schur_indices.begin(), schur_indices.end());
-    }
-
-    template <typename Iterator>
-        requires isStdIteratorOf<Iterator, int>
-    MumpsSchur<MatrixType>& setSchurIndices(Iterator begin, Iterator end) {
-        std::vector<int> schur_indices(begin, end);
-
-        fdapde_assert(schur_indices.size() > 0 && "The Schur complement size must be greater than 0");
-
-        std::sort(schur_indices.begin(), schur_indices.end());
-        fdapde_assert(
-          std::adjacent_find(schur_indices.begin(), schur_indices.end()) == schur_indices.end() &&
-          "The Schur indices must be unique");
-        fdapde_assert(schur_indices.front() >= 0 && "The Schur indices must be positive");
-
-        Base::m_mumps.size_schur = schur_indices.size();
-
-        m_schurIndices = schur_indices;
-        std::for_each(m_schurIndices.begin(), m_schurIndices.end(), [](int& idx) { idx += 1; });
-        m_schurBuff.resize(Base::m_mumps.size_schur * Base::m_mumps.size_schur);
-        Base::m_mumps.listvar_schur = m_schurIndices.data();
-
-        // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
-        if (Base::getProcessRank() == (Base::m_mumps.par + 1) % 2) {
-            Base::m_mumps.schur_lld = Base::m_mumps.size_schur;
-            Base::m_mumps.schur = m_schurBuff.data();
-        }
-
-        m_schurIndicesSet = true;
-
+    MumpsSchur<MatrixType>& setSchurSize(int schur_size) {
+        fdapde_assert(schur_size > 0 && "The Schur complement size must be greater than 0");
+        Base::m_mumps.size_schur = schur_size;
+        m_schurSizeSet = true;
         return *this;
     }
 
     Matrix<Scalar, Dynamic, Dynamic> complement() {
         fdapde_assert(
           Base::m_factorizationIsOk && "The matrix must be factorized with factorize() before calling complement()");
-        MPI_Bcast(m_schurBuff.data(), m_schurBuff.size(), MPI_DOUBLE, (Base::m_mumps.par + 1) % 2, Base::m_mpiComm);
         return Map<Matrix<Scalar, Dynamic, Dynamic>>(
           m_schurBuff.data(), Base::m_mumps.size_schur, Base::m_mumps.size_schur);
     }
    protected:
+    // override define_matrix to add assertions and the matrix-dependent Schur parameters
     void define_matrix(const MatrixType& matrix) override {
         fdapde_assert(
           Base::m_mumps.size_schur < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
         fdapde_assert(
           Base::m_mumps.size_schur < matrix.cols() && "The Schur complement size must be smaller than the matrix size");
-        fdapde_assert(
-          m_schurIndices.back() <= matrix.rows() &&
-          "The Schur indices must be within the matrix size");   // m_schurIndices is 1-based
-        fdapde_assert(
-          m_schurIndices.back() <= matrix.cols() &&
-          "The Schur indices must be within the matrix size");   // m_schurIndices is 1-based
-
         Base::define_matrix(matrix);
+
+        m_schurIndices.resize(Base::m_mumps.size_schur);
+        std::iota(m_schurIndices.begin(), m_schurIndices.end(), Base::m_size - Base::m_mumps.size_schur + 1);
+        Base::m_mumps.listvar_schur = m_schurIndices.data();
+        m_schurBuff.resize(Base::m_mumps.size_schur * Base::m_mumps.size_schur);
+
+        // I need to define these on the first working processor: PAR=1 -> rank 0, PAR=0 -> rank 1
+        if (Base::getProcessRank() == (Base::m_mumps.par + 1) % 2) {
+            Base::m_mumps.schur_lld = Base::m_mumps.size_schur;
+            Base::m_mumps.schur = m_schurBuff.data();
+        }
     }
 
     void analyzePattern_impl() override {
         fdapde_assert(
-          m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling analyzePattern()");
+          m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling analyzePattern()");
         Base::analyzePattern_impl();
     }
 
+    void factorize_impl() override {
+        Base::factorize_impl();
+        MPI_Bcast(m_schurBuff.data(), m_schurBuff.size(), MPI_DOUBLE, (Base::m_mumps.par + 1) % 2, Base::m_mpiComm);
+    }
+
     void compute_impl() override {
-        fdapde_assert(
-          m_schurIndicesSet && "The Schur indices must be set with setSchurIndices() before calling compute()");
+        fdapde_assert(m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling compute()");
         Base::compute_impl();
     }
    protected:
     std::vector<int> m_schurIndices;
     std::vector<Scalar> m_schurBuff;
 
-    bool m_schurIndicesSet;
+    bool m_schurSizeSet;
 };
 
 }   // namespace mumps

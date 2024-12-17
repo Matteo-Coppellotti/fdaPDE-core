@@ -1,7 +1,7 @@
 #ifndef __MUMPS_H__
 #define __MUMPS_H__
 
-#include <Mumps/dmumps_c.h>
+#include <dmumps_c.h>
 #include <mpi.h>
 
 #include <Eigen/Sparse>
@@ -522,8 +522,8 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
         fdapde_assert(matrix.rows() > 0 && "The matrix must be non-empty");
 
-        m_size = matrix.rows();
         if (getProcessRank() == 0) {
+            m_size = matrix.rows();
             m_colIndices.clear();
             m_rowIndices.clear();
             m_values.clear();
@@ -547,6 +547,8 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
             m_mumps.jcn = m_colIndices.data();
             m_mumps.a = m_values.data();
         }
+
+        MPI_Bcast(&m_size, 1, MPI_INT, 0, m_mpiComm);
     }
 
     // virtual void define_matrix(const MatrixType &matrix) {

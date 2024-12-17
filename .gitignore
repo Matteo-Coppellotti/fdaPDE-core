@@ -51,3 +51,4 @@ experiments/
 !mumps_testing/computation_times/**
 mumps_testing/computation_times/build/
 mumps_testing/computation_times/build/**
+mumps_testing/computation_times/plots/**

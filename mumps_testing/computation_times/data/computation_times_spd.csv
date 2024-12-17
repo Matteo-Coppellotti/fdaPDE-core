@@ -1,0 +1,13 @@
+N,problem,solver,time
+10,mass,SimplicialLLT,0.000656456
+10,mass,MumpsLDLT,0.00205594
+10,laplacian,SimplicialLLT,0.000517827
+10,laplacian,MumpsLDLT,0.0177896
+50,mass,SimplicialLLT,0.0204564
+50,mass,MumpsLDLT,0.334802
+50,laplacian,SimplicialLLT,0.0190415
+50,laplacian,MumpsLDLT,0.37214
+100,mass,SimplicialLLT,0.120189
+100,mass,MumpsLDLT,1.14143
+100,laplacian,SimplicialLLT,0.0997318
+100,laplacian,MumpsLDLT,1.08174

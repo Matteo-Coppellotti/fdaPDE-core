@@ -29,23 +29,54 @@ set(LIBS_SCALAPACK "scalapack-openmpi")
 set(LIBS_BLAS "blas")
 set(LIBS_OTHERS "pthread" "stdc++")
 
-add_executable(mumps_computation_times src/computation_times.cpp)
-set_target_properties(mumps_computation_times PROPERTIES LINKER_LANGUAGE Fortran)
+add_executable(gen_data_rand src/gen_data_rand.cpp)
+set_target_properties(gen_data_rand PROPERTIES LINKER_LANGUAGE Fortran)
 
-target_include_directories(mumps_computation_times PRIVATE
+target_include_directories(gen_data_rand PRIVATE
     ${IEIGENDIR}
     ${IDMUMPSDIR}
     ${MPI_INCLUDE_PATH}
 )
 
-target_link_directories(mumps_computation_times PRIVATE
+target_link_directories(gen_data_rand PRIVATE
     ${LSCOTCHDIR}
     ${LPORDDIR}
     ${LMETISDIR}
     ${LDMUMPSDIR}
 )
 
-target_link_libraries(mumps_computation_times PRIVATE
+target_link_libraries(gen_data_rand PRIVATE
+    ${LIBS_DMUMPS}
+    ${LIBS_SCOTCH}
+    ${LIBS_METIS}
+    ${LIBS_PORD}
+    ${LIBS_LAPACK}
+    ${LIBS_SCALAPACK}
+    ${LIBS_BLAS}
+    ${LIBS_OTHERS}
+    MPI::MPI_Fortran
+    MPI::MPI_CXX
+    OpenMP::OpenMP_CXX
+    gtest_main
+)
+
+add_executable(gen_data_mesh src/gen_data_mesh.cpp)
+set_target_properties(gen_data_mesh PROPERTIES LINKER_LANGUAGE Fortran)
+
+target_include_directories(gen_data_mesh PRIVATE
+    ${IEIGENDIR}
+    ${IDMUMPSDIR}
+    ${MPI_INCLUDE_PATH}
+)
+
+target_link_directories(gen_data_mesh PRIVATE
+    ${LSCOTCHDIR}
+    ${LPORDDIR}
+    ${LMETISDIR}
+    ${LDMUMPSDIR}
+)
+
+target_link_libraries(gen_data_mesh PRIVATE
     ${LIBS_DMUMPS}
     ${LIBS_SCOTCH}
     ${LIBS_METIS}

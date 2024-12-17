@@ -4,7 +4,7 @@
 set(MUMPSDIR "/home/matteo/Desktop/MUMPS-openMPI-noBLACS")
 
 # Path to the eigen3 directory
-set(EIGENDIR "/home/matteo/Desktop/eigen")
+set(EIGENDIR "/usr/local/include/eigen3")
 
 # Path to the scotch and ptscotch directory
 set(LSCOTCHDIR "/usr/lib")

@@ -9,19 +9,20 @@ fi
 mkdir $BUILD_DIR
 cd $BUILD_DIR
 
-g++ -std=c++20 -O -fopenmp -c ../src/gen_data_mesh.cpp -o mumps_h_test.o \
+g++ --version
+
+g++ -std=c++20 -O -fopenmp -c ../src/gen_data_mesh.cpp -o gen_data_mesh.o \
     -I$(spack location -i eigen)/include/eigen3 \
     -I$(spack location -i mumps)/include \
     -I$(spack location -i openmpi)/include
 
-gfortran -o mumps_h_test -O -fopenmp mumps_h_test.o \
+gfortran -o gen_data_mesh -O -fopenmp gen_data_mesh.o \
     -L$(spack location -i mumps)/lib -ldmumps -lmumps_common -lpord \
     -L$(spack location -i gcc)/lib64 -lstdc++ \
-    -L$(spack location -i openmpi)/lib -lmpifort -lmpi -lmpi_cxx \
+    -L$(spack location -i openmpi)/lib -lmpi \
     -L$(spack location -i netlib-scalapack)/lib -lscalapack \
-    -L$(spack location -i lapack)/lib -llapack \
-    -L$(spack location -i scotch)/lib -lptscotch -lptscotcherr -lptesmumps \
-    -L$(spack location -i metis)/lib -lparmetis -lmetis \
-    -lpthread \
-    -L$(spack location -i openmpi)/lib -lmpi -lmpic++ -lmpifort \
-    -L$(spack location -i openblas)/lib -lopenblas -lpthread
+    -L$(spack location -i netlib-lapack)/lib64 -llapack -lblas \
+    -L$(spack location -i scotch)/lib -lptscotch -lptscotcherr \
+    -L$(spack location -i metis)/lib -lmetis \
+    -L$(spack location -i parmetis)/lib -lparmetis \
+    -lpthread

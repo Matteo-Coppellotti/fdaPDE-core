@@ -325,7 +325,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     //     }
     // }
 
-    Scalar determinant() {
+    Scalar determinant() const {
         fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
         fdapde_assert(
           m_factorizationIsOk && "The matrix must be factoried with factorize() before calling determinant()");
@@ -658,7 +658,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         errorCheck();
     }
 
-    virtual void analyzePattern_impl() {
+    void analyzePattern_impl() {
         m_info = InvalidInput;
         mumps_execute(1);   // 1: analyze
         m_info = Success;
@@ -667,7 +667,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_factorizationIsOk = false;
     }
 
-    virtual void factorize_impl() {
+    void factorize_impl() {
         fdapde_assert(m_analysisIsOk && "The matrix must be analyzed with analyzePattern() before calling factorize()");
         m_info = NumericalIssue;
         mumps_execute(2);   // 2: factorize
@@ -675,7 +675,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
         m_factorizationIsOk = true;
     }
 
-    virtual void compute_impl() {
+    void compute_impl() {
         analyzePattern_impl();
         factorize_impl();
     }
@@ -796,7 +796,7 @@ template <isEigenSparseMatrix MatrixType, int Options> class MumpsLDLT : public 
     ~MumpsLDLT() override {
         if (!Base::m_mumpsFinalized) { Base::mumpsFinalize(); }
     }
-
+   protected:
     void define_matrix(const MatrixType& matrix) override {
         Base::define_matrix(matrix.template triangularView<Options>());
     }
@@ -997,6 +997,9 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
     // override define_matrix to add assertions and the matrix-dependent Schur parameters
     void define_matrix(const MatrixType& matrix) override {
         fdapde_assert(
+          m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling either alanlyzePattern(), " +
+                              "facorize() or compute()");
+        fdapde_assert(
           Base::m_mumps.size_schur < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
         fdapde_assert(
           Base::m_mumps.size_schur < matrix.cols() && "The Schur complement size must be smaller than the matrix size");
@@ -1012,22 +1015,6 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
             Base::m_mumps.schur_lld = Base::m_mumps.size_schur;
             Base::m_mumps.schur = m_schurBuff.data();
         }
-    }
-
-    void analyzePattern_impl() override {
-        fdapde_assert(
-          m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling analyzePattern()");
-        Base::analyzePattern_impl();
-    }
-
-    void factorize_impl() override {
-        Base::factorize_impl();
-        MPI_Bcast(m_schurBuff.data(), m_schurBuff.size(), MPI_DOUBLE, (Base::m_mumps.par + 1) % 2, Base::m_mpiComm);
-    }
-
-    void compute_impl() override {
-        fdapde_assert(m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling compute()");
-        Base::compute_impl();
     }
    protected:
     std::vector<int> m_schurIndices;

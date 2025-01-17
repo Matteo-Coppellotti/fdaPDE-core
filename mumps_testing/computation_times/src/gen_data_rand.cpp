@@ -79,6 +79,93 @@ int main(int argc, char* argv[]) {
         if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
         file << "Solver,N,density,time\n";
     }
+    std::vector<std::string> temp = {"wrapped", "not-wrapped"};
+    for (auto solver : temp) {
+        for (size_t i = 0; i < N.size(); ++i) {
+            for (size_t j = 0; j < dens.size(); ++j) {
+                A = Matrices(i, j);
+                b = VectorXd::Ones(N[i]);
+
+                for (int n = 0; n < Iterations; ++n) {
+                    if (solver == "wrapped") {
+                        auto t1 = high_resolution_clock::now();
+                        MumpsLU mumps(A);
+                        x = mumps.solve(b);
+                        auto t2 = high_resolution_clock::now();
+                        duration<double> duration = t2 - t1;
+                        MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+                        if (rank == 0) {
+                            std::cout << "Wrapped" << "," << N[i] << "," << dens[j] << "," << duration.count() << "\n";
+                            file << "Wrapped" << "," << N[i] << "," << dens[j] << "," << duration.count() << "\n";
+                        }
+                    }
+                    if (solver == "not-wrapped") {
+                        std::vector<int> col_indices;
+                        std::vector<int> row_indices;
+                        std::vector<double> values;
+                        col_indices.reserve(A.nonZeros());
+                        row_indices.reserve(A.nonZeros());
+                        values.reserve(A.nonZeros());
+                        MatrixXd buff = b;
+                        for (int k = 0; k < A.outerSize(); ++k) {
+                            for (SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
+                                row_indices.push_back(it.row() + 1);
+                                col_indices.push_back(it.col() + 1);
+                                values.push_back(it.value());
+                            }
+                        }
+                        auto t1 = high_resolution_clock::now();
+                        DMUMPS_STRUC_C id;
+                        id.comm_fortran = (MUMPS_INT)MPI_Comm_c2f(MPI_COMM_WORLD);
+                        id.par = 0;
+                        id.sym = 0;
+                        id.job = -1;
+                        dmumps_c(&id);
+                        if (rank == 0) {
+                            id.n = A.rows();
+                            id.nnz = A.nonZeros();
+                            id.irn = row_indices.data();
+                            id.jcn = col_indices.data();
+                            id.a = values.data();
+
+                            id.nrhs = buff.cols();
+                            id.lrhs = buff.rows();
+                            id.rhs = const_cast<double*>(buff.data());
+                        }
+                        id.icntl[32] = 1;
+                        id.icntl[0] = -1;
+                        id.icntl[1] = -1;
+                        id.icntl[2] = -1;
+                        id.icntl[3] = 0;
+                        id.job = 6;
+                        dmumps_c(&id);
+                        auto t2 = high_resolution_clock::now();
+                        id.job = -2;
+                        dmumps_c(&id);
+                        MPI_Bcast(buff.data(), buff.size(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+                        duration<double> duration = t2 - t1;
+                        MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+                        if (rank == 0) {
+                            std::cout << "Not-wrapped" << "," << N[i] << "," << dens[j] << "," << duration.count()
+                                      << "\n";
+                            file << "Not-wrapped" << "," << N[i] << "," << dens[j] << "," << duration.count() << "\n";
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+    if (rank == 0) {
+        file.close();
+        saveCSV("../data/rand_computation_times_vs_raw.csv");
+    }
+
+    if (rank == 0) {
+        file.open(filename);
+        if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
+        file << "Solver,N,density,time\n";
+    }
     for (auto solver : solvers) {
         for (size_t i = 0; i < N.size(); ++i) {
             for (size_t j = 0; j < dens.size(); ++j) {

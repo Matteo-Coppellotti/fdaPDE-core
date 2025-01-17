@@ -45,7 +45,7 @@ int main() {
     /**
      * SET THE PROBLEM SIZE
      */
-    std::vector<int> N = {10, 50, 100};
+    std::vector<int> N = {10, 100, 1000, 10000, 100000, 1000000};
 
     /**
      * SET THE SOLVERS TO BE USED
@@ -65,7 +65,7 @@ int main() {
     /**
      * SET THE NUMBER OF ITERATIONS
      */
-    int n_iter = 1;
+    int n_iter = 100;
 
     /**
      * SET THE PROBLEMS TO BE SOLVED
@@ -87,7 +87,10 @@ int main() {
     // MPI initialization + rank (for output)
     MPI_Init(NULL, NULL);
     int rank;
+    int size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    if (rank == 0) std::cout << "MPI initialized with" << size << "processes." << std::endl;
 
     // create output directory
     if (rank == 0) {
@@ -96,6 +99,7 @@ int main() {
 
     // fill data structures
     for (int n : N) {
+        if (rank == 0) {
         /**
          * Available mesh generators:
          * - meshInterval(a, b, n_nodes)
@@ -139,6 +143,14 @@ int main() {
         if (rank == 0) std::cout << "Generated force for " << n << " nodes" << std::endl;
 
         // linear system: R1 * u = f
+        }
+        else {
+            mass_matrices.push_back(SparseMatrix<double>());
+            laplacian_matrices.push_back(SparseMatrix<double>());
+            diffusion_transport_matrices.push_back(SparseMatrix<double>());
+
+            forces.push_back(VectorXd());
+        }
     }
 
     // print sparsity patterns of the matrices
@@ -190,7 +202,7 @@ int main() {
             for (const auto& solver : solvers) {
                 for (int iter = 0; iter < n_iter; ++iter) {
                     auto t1 = high_resolution_clock::now();
-                    if (solver == "SparseLU") {
+                    if (solver == "SparseLU" && rank == 0) {
                         Eigen::SparseLU<SparseMatrix<double>> solver(A);
                         VectorXd x = solver.solve(forces[i]);
                     }
@@ -232,7 +244,7 @@ int main() {
             for (const auto& solver : solvers_spd) {
                 for (int iter = 0; iter < n_iter; ++iter) {
                     auto t1 = high_resolution_clock::now();
-                    if (solver == "SimplicialLLT") {
+                    if (solver == "SimplicialLLT" && rank == 0) {
                         Eigen::SimplicialLLT<SparseMatrix<double>> solver(A);
                         VectorXd x = solver.solve(forces[i]);
                     }

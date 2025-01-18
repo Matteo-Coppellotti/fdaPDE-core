@@ -519,10 +519,10 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     // define_matrix, ho fatto un paio di prove veloci con delle matrici prese da matrix market ma non ho riscontrato
     // particolari differenze in termini di velocità di computazione.
     virtual void define_matrix(const MatrixType& matrix) {
-        fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
-        fdapde_assert(matrix.rows() > 0 && "The matrix must be non-empty");
-
         if (getProcessRank() == 0) {
+            fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");
+            fdapde_assert(matrix.rows() > 0 && "The matrix must be non-empty");
+
             m_size = matrix.rows();
             m_colIndices.clear();
             m_rowIndices.clear();

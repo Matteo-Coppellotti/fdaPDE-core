@@ -99,7 +99,6 @@ int main() {
 
     // fill data structures
     for (int n : N) {
-        if (rank == 0) {
         /**
          * Available mesh generators:
          * - meshInterval(a, b, n_nodes)
@@ -121,36 +120,32 @@ int main() {
         FeSpace Vh(unit_square, P1<1>);
         TrialFunction u(Vh);
         TestFunction v(Vh);
+        if (rank == 0) {
+            auto a1 = integral(unit_square)(u * v);                   // mass matrix: SPD
+            auto a2 = integral(unit_square)(dot(grad(u), grad(v)));   // laplacian discretization (Poisson): SPD
 
-        auto a1 = integral(unit_square)(u * v);                   // mass matrix: SPD
-        auto a2 = integral(unit_square)(dot(grad(u), grad(v)));   // laplacian discretization (Poisson): SPD
+            Matrix<double, 2, 1> b(0.2, 0.2);
 
-        Matrix<double, 2, 1> b(0.2, 0.2);
+            auto a3 = integral(unit_square)(
+              dot(grad(u), grad(v)) + dot(b, grad(u)) * v);   // diffusion-transport: non simmetrica
 
-        auto a3 =
-          integral(unit_square)(dot(grad(u), grad(v)) + dot(b, grad(u)) * v);   // diffusion-transport: non simmetrica
+            mass_matrices.push_back(SparseMatrix<double>(a1.assemble()));
+            laplacian_matrices.push_back(SparseMatrix<double>(a2.assemble()));
+            diffusion_transport_matrices.push_back(SparseMatrix<double>(a3.assemble()));
+            if (rank == 0) std::cout << "Generated matrices for " << n << " nodes" << std::endl;
 
-        mass_matrices.push_back(SparseMatrix<double>(a1.assemble()));
-        laplacian_matrices.push_back(SparseMatrix<double>(a2.assemble()));
-        diffusion_transport_matrices.push_back(SparseMatrix<double>(a3.assemble()));
-        if (rank == 0) std::cout << "Generated matrices for " << n << " nodes" << std::endl;
-
+            // linear system: R1 * u = f
+        } else {
+            mass_matrices.push_back(SparseMatrix<double>(n, n));
+            laplacian_matrices.push_back(SparseMatrix<double>(n, n));
+            diffusion_transport_matrices.push_back(SparseMatrix<double>(n, n));
+        }
         // forcing term
         ScalarField<2, decltype([]([[maybe_unused]] const Vector2d& p) { return 1; })> f;
         auto F = integral(unit_square)(f * v);
 
         forces.push_back(VectorXd(F.assemble()));
         if (rank == 0) std::cout << "Generated force for " << n << " nodes" << std::endl;
-
-        // linear system: R1 * u = f
-        }
-        else {
-            mass_matrices.push_back(SparseMatrix<double>());
-            laplacian_matrices.push_back(SparseMatrix<double>());
-            diffusion_transport_matrices.push_back(SparseMatrix<double>());
-
-            forces.push_back(VectorXd());
-        }
     }
 
     // print sparsity patterns of the matrices
@@ -278,8 +273,7 @@ int main() {
 
         for (size_t i = 0; i < N.size(); ++i) {
             for (const auto& problem : problems) {
-                for (int schur_size = N[i] / 10; schur_size < N[i];
-                     schur_size += N[i] / 10) {   // change step ???
+                for (int schur_size = N[i] / 10; schur_size < N[i]; schur_size += N[i] / 10) {   // change step ???
                     for (int iter = 0; iter < n_iter; ++iter) {
                         auto t1 = high_resolution_clock::now();
                         MumpsSchur solver(mass_matrices[i], schur_size);

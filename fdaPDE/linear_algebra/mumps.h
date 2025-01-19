@@ -255,7 +255,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     template <typename BDerived, typename XDerived>
     void _solve_impl(const SparseMatrixBase<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
-        
+
         SparseMatrix<Scalar, ColMajor> loc_b;
 
         std::vector<StorageIndex> irhs_ptr;   // Stores the indices of the non zeros in valuePts that start a new column
@@ -997,11 +997,16 @@ template <isEigenSparseMatrix MatrixType> class MumpsSchur : public MumpsBase<Mu
     // override define_matrix to add assertions and the matrix-dependent Schur parameters
     void define_matrix(const MatrixType& matrix) override {
         fdapde_assert(
-          m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling either alanlyzePattern() or facorize() or compute()");
-        fdapde_assert(
-          Base::m_mumps.size_schur < matrix.rows() && "The Schur complement size must be smaller than the matrix size");
-        fdapde_assert(
-          Base::m_mumps.size_schur < matrix.cols() && "The Schur complement size must be smaller than the matrix size");
+          m_schurSizeSet && "The Schur size must be set with setSchurSize() before calling either alanlyzePattern() or "
+                            "facorize() or compute()");
+        if (Base::getProcessRank() == 0) {
+            fdapde_assert(
+              Base::m_mumps.size_schur < matrix.rows() &&
+              "The Schur complement size must be smaller than the matrix size");
+            fdapde_assert(
+              Base::m_mumps.size_schur < matrix.cols() &&
+              "The Schur complement size must be smaller than the matrix size");
+        }
         Base::define_matrix(matrix);
 
         m_schurIndices.resize(Base::m_mumps.size_schur);

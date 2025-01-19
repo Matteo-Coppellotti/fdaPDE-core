@@ -19,9 +19,12 @@ void saveCSV(std::string input_filename, std::string output_filename);
 
 int main() {
     /**
-     * GENERATE SCHUR TIMES?
+     * BOOLEANS FOR THE COMPUION TIMES REQUESTED
      */
+    bool generate_times = true;
+    bool generate_spd_times = true;
     bool generate_schur_times = true;
+    bool generate_raw_times = true;
 
     /**
      * SET THE OUTPUT DIRECTORY
@@ -41,6 +44,7 @@ int main() {
     std::string output_filename = "computation_times.csv";
     std::string output_filename_spd = "computation_times_spd.csv";
     std::string output_filename_schur = "computation_times_schur.csv";
+    std::string output_filename_raw = "computation_times_raw.csv";
 
     /**
      * SET THE PROBLEM SIZE
@@ -111,7 +115,7 @@ int main() {
          * - meshUnitCube(n_nodes)
          */
 
-        //Eigen::VectorXd force(n*n);
+        // Eigen::VectorXd force(n*n);
         if (rank == 0) {
             auto mesh = meshUnitSquare(n);
             if (rank == 0) std::cout << "Generated mesh with " << n << " nodes" << std::endl;
@@ -139,7 +143,7 @@ int main() {
             ScalarField<2, decltype([]([[maybe_unused]] const Vector2d& p) { return 1; })> f;
             auto F = integral(unit_square)(f * v);
 
-            //force = F.assemble();
+            // force = F.assemble();
             forces.push_back(F.assemble());
 
             // linear system: R1 * u = f
@@ -148,10 +152,10 @@ int main() {
             laplacian_matrices.push_back(SparseMatrix<double>());
             diffusion_transport_matrices.push_back(SparseMatrix<double>());
 
-            forces.push_back(VectorXd(n*n));
+            forces.push_back(VectorXd(n * n));
         }
-        //MPI_Bcast(force.data(), n*n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        //forces.push_back(force);
+        // MPI_Bcast(force.data(), n*n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        // forces.push_back(force);
         if (rank == 0) std::cout << "Generated force for " << n << " nodes" << std::endl;
     }
 
@@ -189,85 +193,89 @@ int main() {
     std::string output_path_spd = output_directory + "/" + output_filename_spd;
     std::string output_path_schur = output_directory + "/" + output_filename_schur;
 
-    if (rank == 0) {
-        std::cout << "Solving problems" << std::endl;
-        file.open(temp_path);
-        if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
-        file << "N,problem,solver,time\n";
-    }
-    for (size_t i = 0; i < N.size(); ++i) {
-        SparseMatrix<double> A;
-        for (const auto& problem : problems) {
-            if (problem == "mass") { A = mass_matrices[i]; }
-            if (problem == "laplacian") { A = laplacian_matrices[i]; }
-            if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
-            for (const auto& solver : solvers) {
-                for (int iter = 0; iter < n_iter; ++iter) {
-                    auto t1 = high_resolution_clock::now();
-                    if (solver == "SparseLU" && rank == 0) {
-                        Eigen::SparseLU<SparseMatrix<double>> solver(A);
-                        VectorXd x = solver.solve(forces[i]);
-                    }
-                    if (solver == "MumpsLU") {
-                        MumpsLU solver(A);
-                        VectorXd x = solver.solve(forces[i]);
-                    }
-                    if (solver == "MumpsBLR") {
-                        MumpsBLR solver(A);
-                        VectorXd x = solver.solve(forces[i]);
-                    }
-                    auto t2 = high_resolution_clock::now();
-                    duration<double> duration = t2 - t1;
-                    MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
-                    if (rank == 0) {
-                        std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
-                        file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+    if (generate_times) {
+        if (rank == 0) {
+            std::cout << "Solving problems" << std::endl;
+            file.open(temp_path);
+            if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
+            file << "N,problem,solver,time\n";
+        }
+        for (size_t i = 0; i < N.size(); ++i) {
+            SparseMatrix<double> A;
+            for (const auto& problem : problems) {
+                if (problem == "mass") { A = mass_matrices[i]; }
+                if (problem == "laplacian") { A = laplacian_matrices[i]; }
+                if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
+                for (const auto& solver : solvers) {
+                    for (int iter = 0; iter < n_iter; ++iter) {
+                        auto t1 = high_resolution_clock::now();
+                        if (solver == "SparseLU" && rank == 0) {
+                            Eigen::SparseLU<SparseMatrix<double>> solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                        }
+                        if (solver == "MumpsLU") {
+                            MumpsLU solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                        }
+                        if (solver == "MumpsBLR") {
+                            MumpsBLR solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                        }
+                        auto t2 = high_resolution_clock::now();
+                        duration<double> duration = t2 - t1;
+                        MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+                        if (rank == 0) {
+                            std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                            file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                        }
                     }
                 }
             }
         }
-    }
-    if (rank == 0) {
-        file.close();
-        saveCSV(temp_path, output_path);
+        if (rank == 0) {
+            file.close();
+            saveCSV(temp_path, output_path);
+        }
     }
 
-    if (rank == 0) {
-        std::cout << "Solving SPD problems" << std::endl;
-        file.open(temp_path);
-        if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
-        file << "N,problem,solver,time\n";
-    }
-    for (size_t i = 0; i < N.size(); ++i) {
-        SparseMatrix<double> A;
-        for (const auto& problem : problems_spd) {
-            if (problem == "mass") { A = mass_matrices[i]; }
-            if (problem == "laplacian") { A = laplacian_matrices[i]; }
-            for (const auto& solver : solvers_spd) {
-                for (int iter = 0; iter < n_iter; ++iter) {
-                    auto t1 = high_resolution_clock::now();
-                    if (solver == "SimplicialLLT" && rank == 0) {
-                        Eigen::SimplicialLLT<SparseMatrix<double>> solver(A);
-                        VectorXd x = solver.solve(forces[i]);
-                    }
-                    if (solver == "MumpsLDLT") {
-                        MumpsLDLT solver(A);
-                        VectorXd x = solver.solve(forces[i]);
-                    }
-                    auto t2 = high_resolution_clock::now();
-                    duration<double> duration = t2 - t1;
-                    MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
-                    if (rank == 0) {
-                        std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
-                        file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+    if (generate_spd_times) {
+        if (rank == 0) {
+            std::cout << "Solving SPD problems" << std::endl;
+            file.open(temp_path);
+            if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
+            file << "N,problem,solver,time\n";
+        }
+        for (size_t i = 0; i < N.size(); ++i) {
+            SparseMatrix<double> A;
+            for (const auto& problem : problems_spd) {
+                if (problem == "mass") { A = mass_matrices[i]; }
+                if (problem == "laplacian") { A = laplacian_matrices[i]; }
+                for (const auto& solver : solvers_spd) {
+                    for (int iter = 0; iter < n_iter; ++iter) {
+                        auto t1 = high_resolution_clock::now();
+                        if (solver == "SimplicialLLT" && rank == 0) {
+                            Eigen::SimplicialLLT<SparseMatrix<double>> solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                        }
+                        if (solver == "MumpsLDLT") {
+                            MumpsLDLT solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                        }
+                        auto t2 = high_resolution_clock::now();
+                        duration<double> duration = t2 - t1;
+                        MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+                        if (rank == 0) {
+                            std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                            file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                        }
                     }
                 }
             }
         }
-    }
-    if (rank == 0) {
-        file.close();
-        saveCSV(temp_path, output_path_spd);
+        if (rank == 0) {
+            file.close();
+            saveCSV(temp_path, output_path_spd);
+        }
     }
 
     if (generate_schur_times) {
@@ -279,11 +287,15 @@ int main() {
         }
 
         for (size_t i = 0; i < N.size(); ++i) {
+            SparseMatrix<double> A;
             for (const auto& problem : problems) {
+                if (problem == "mass") { A = mass_matrices[i]; }
+                if (problem == "laplacian") { A = laplacian_matrices[i]; }
+                if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
                 for (int schur_size = N[i] / 10; schur_size < N[i]; schur_size += N[i] / 10) {   // change step ???
                     for (int iter = 0; iter < n_iter; ++iter) {
                         auto t1 = high_resolution_clock::now();
-                        MumpsSchur solver(mass_matrices[i], schur_size);
+                        MumpsSchur solver(A, schur_size);
                         VectorXd x = solver.solve(forces[i]);
                         auto t2 = high_resolution_clock::now();
                         duration<double> duration = t2 - t1;
@@ -302,8 +314,95 @@ int main() {
         }
     }
 
+    if (generate_raw_times) {
+        if (rank == 0) {
+            std::cout << "Solving with raw MUMPS" << std::endl;
+            file.open(temp_path);
+            if (!file.is_open()) { throw std::runtime_error("Unable to open file for writing."); }
+            file << "N,problem,solver,time\n";
+        }
+
+        std::vector<std::string> temp_solvers = {"Wrapped", "Non-wrapped"};
+        for (size_t i = 0; i < N.size(); ++i) {
+            SparseMatrix<double> A;
+            for (const auto& problem : problems_spd) {
+                if (problem == "mass") { A = mass_matrices[i]; }
+                if (problem == "laplacian") { A = laplacian_matrices[i]; }
+                if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
+                for (const auto& solver : temp_solvers) {
+                    for (int iter = 0; iter < n_iter; ++iter) {
+                        duration<double> duration;
+                        if (solver == "Wrapped") {
+                            auto t1 = high_resolution_clock::now();
+                            MumpsLU solver(A);
+                            VectorXd x = solver.solve(forces[i]);
+                            auto t2 = high_resolution_clock::now();
+                            duration = t2 - t1;
+                        }
+                        if (solver == "Non-wrapped") {
+                            std::vector<int> col_indices;
+                            std::vector<int> row_indices;
+                            std::vector<double> values;
+                            col_indices.reserve(A.nonZeros());
+                            row_indices.reserve(A.nonZeros());
+                            values.reserve(A.nonZeros());
+                            MatrixXd buff = forces[i];
+                            for (int k = 0; k < A.outerSize(); ++k) {
+                                for (SparseMatrix<double>::InnerIterator it(A, k); it; ++it) {
+                                    row_indices.push_back(it.row() + 1);
+                                    col_indices.push_back(it.col() + 1);
+                                    values.push_back(it.value());
+                                }
+                            }
+                            auto t1 = high_resolution_clock::now();
+                            DMUMPS_STRUC_C id;
+                            id.comm_fortran = (MUMPS_INT)MPI_Comm_c2f(MPI_COMM_WORLD);
+                            id.par = 0;
+                            id.sym = 0;
+                            id.job = -1;
+                            dmumps_c(&id);
+                            if (rank == 0) {
+                                id.n = A.rows();
+                                id.nnz = A.nonZeros();
+                                id.irn = row_indices.data();
+                                id.jcn = col_indices.data();
+                                id.a = values.data();
+
+                                id.nrhs = buff.cols();
+                                id.lrhs = buff.rows();
+                                id.rhs = const_cast<double*>(buff.data());
+                            }
+                            id.icntl[32] = 1;
+                            id.icntl[0] = -1;
+                            id.icntl[1] = -1;
+                            id.icntl[2] = -1;
+                            id.icntl[3] = 0;
+                            id.job = 6;
+                            dmumps_c(&id);
+                            auto t2 = high_resolution_clock::now();
+                            id.job = -2;
+                            dmumps_c(&id);
+                            duration = t2 - t1;
+                        }
+                        MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+                        if (rank == 0) {
+                            std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                            file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
+                        }
+                    }
+                }
+            }
+        }
+        if (rank == 0) {
+            file.close();
+            saveCSV(temp_path, output_path_schur);
+        }
+    }
+
     // delete temporary file
-    if (rank == 0) std::filesystem::remove(temp_path);
+    if (rank == 0) {
+        if (std::filesystem::exists(temp_path)) std::filesystem::remove(temp_path);
+    }
 
     MPI_Finalize();
     return 0;

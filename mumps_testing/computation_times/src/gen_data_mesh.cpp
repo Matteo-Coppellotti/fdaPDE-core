@@ -45,7 +45,7 @@ int main() {
     /**
      * SET THE PROBLEM SIZE
      */
-    std::vector<int> N = {10, 100, 1000, 10000, 100000, 1000000};
+    std::vector<int> N = {10, 100, 1000, 10000};
 
     /**
      * SET THE SOLVERS TO BE USED
@@ -110,17 +110,18 @@ int main() {
          * - meshCube(a, b, n_nodes)
          * - meshUnitCube(n_nodes)
          */
-        auto mesh = meshUnitSquare(n);
 
-        if (rank == 0) std::cout << "Generated mesh with " << n << " nodes" << std::endl;
-
-        Triangulation</* tangent_space = */ 2, /* embedding_space = */ 2> unit_square(
-          mesh.nodes, mesh.elements, mesh.boundary);
-
-        FeSpace Vh(unit_square, P1<1>);
-        TrialFunction u(Vh);
-        TestFunction v(Vh);
+        //Eigen::VectorXd force(n*n);
         if (rank == 0) {
+            auto mesh = meshUnitSquare(n);
+            if (rank == 0) std::cout << "Generated mesh with " << n << " nodes" << std::endl;
+
+            Triangulation</* tangent_space = */ 2, /* embedding_space = */ 2> unit_square(
+              mesh.nodes, mesh.elements, mesh.boundary);
+
+            FeSpace Vh(unit_square, P1<1>);
+            TrialFunction u(Vh);
+            TestFunction v(Vh);
             auto a1 = integral(unit_square)(u * v);                   // mass matrix: SPD
             auto a2 = integral(unit_square)(dot(grad(u), grad(v)));   // laplacian discretization (Poisson): SPD
 
@@ -134,17 +135,23 @@ int main() {
             diffusion_transport_matrices.push_back(SparseMatrix<double>(a3.assemble()));
             if (rank == 0) std::cout << "Generated matrices for " << n << " nodes" << std::endl;
 
+            // forcing term
+            ScalarField<2, decltype([]([[maybe_unused]] const Vector2d& p) { return 1; })> f;
+            auto F = integral(unit_square)(f * v);
+
+            //force = F.assemble();
+            forces.push_back(F.assemble());
+
             // linear system: R1 * u = f
         } else {
-            mass_matrices.push_back(SparseMatrix<double>(n, n));
-            laplacian_matrices.push_back(SparseMatrix<double>(n, n));
-            diffusion_transport_matrices.push_back(SparseMatrix<double>(n, n));
-        }
-        // forcing term
-        ScalarField<2, decltype([]([[maybe_unused]] const Vector2d& p) { return 1; })> f;
-        auto F = integral(unit_square)(f * v);
+            mass_matrices.push_back(SparseMatrix<double>());
+            laplacian_matrices.push_back(SparseMatrix<double>());
+            diffusion_transport_matrices.push_back(SparseMatrix<double>());
 
-        forces.push_back(VectorXd(F.assemble()));
+            forces.push_back(VectorXd(n*n));
+        }
+        //MPI_Bcast(force.data(), n*n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        //forces.push_back(force);
         if (rank == 0) std::cout << "Generated force for " << n << " nodes" << std::endl;
     }
 

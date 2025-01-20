@@ -21,6 +21,7 @@ int main() {
     /**
      * BOOLEANS FOR THE COMPUION TIMES REQUESTED
      */
+    bool print_sparsity_patterns = false;
     bool generate_times = true;
     bool generate_spd_times = true;
     bool generate_schur_times = true;
@@ -160,29 +161,32 @@ int main() {
     }
 
     // print sparsity patterns of the matrices
-    if (rank == 0) {
-        std::cout << "Printing sparsity patterns" << std::endl;
-        std::string sp_patterns_directory = output_directory + "/sparsity_patterns";
-        if (!std::filesystem::exists(sp_patterns_directory)) {
-            std::filesystem::create_directory(sp_patterns_directory);
-        }
-        if (!std::filesystem::exists(sp_patterns_directory + "/mass")) {
-            std::filesystem::create_directory(sp_patterns_directory + "/mass");
-        }
-        if (!std::filesystem::exists(sp_patterns_directory + "/laplacian")) {
-            std::filesystem::create_directory(sp_patterns_directory + "/laplacian");
-        }
-        if (!std::filesystem::exists(sp_patterns_directory + "/diffusion_transport")) {
-            std::filesystem::create_directory(sp_patterns_directory + "/diffusion_transport");
-        }
-        for (int i = 0; i < N.size(); ++i) {
-            printSparsityPattern(
-              mass_matrices[i], sp_patterns_directory + "/mass/mass_" + std::to_string(N[i]) + ".csv");
-            printSparsityPattern(
-              laplacian_matrices[i], sp_patterns_directory + "/laplacian/laplacian_" + std::to_string(N[i]) + ".csv");
-            printSparsityPattern(
-              diffusion_transport_matrices[i],
-              sp_patterns_directory + "/diffusion_transport/diffusion_transport_" + std::to_string(N[i]) + ".csv");
+    if (print_sparsity_patterns) {
+        if (rank == 0) {
+            std::cout << "Printing sparsity patterns" << std::endl;
+            std::string sp_patterns_directory = output_directory + "/sparsity_patterns";
+            if (!std::filesystem::exists(sp_patterns_directory)) {
+                std::filesystem::create_directory(sp_patterns_directory);
+            }
+            if (!std::filesystem::exists(sp_patterns_directory + "/mass")) {
+                std::filesystem::create_directory(sp_patterns_directory + "/mass");
+            }
+            if (!std::filesystem::exists(sp_patterns_directory + "/laplacian")) {
+                std::filesystem::create_directory(sp_patterns_directory + "/laplacian");
+            }
+            if (!std::filesystem::exists(sp_patterns_directory + "/diffusion_transport")) {
+                std::filesystem::create_directory(sp_patterns_directory + "/diffusion_transport");
+            }
+            for (int i = 0; i < N.size(); ++i) {
+                printSparsityPattern(
+                  mass_matrices[i], sp_patterns_directory + "/mass/mass_" + std::to_string(N[i]) + ".csv");
+                printSparsityPattern(
+                  laplacian_matrices[i],
+                  sp_patterns_directory + "/laplacian/laplacian_" + std::to_string(N[i]) + ".csv");
+                printSparsityPattern(
+                  diffusion_transport_matrices[i],
+                  sp_patterns_directory + "/diffusion_transport/diffusion_transport_" + std::to_string(N[i]) + ".csv");
+            }
         }
     }
 
@@ -192,6 +196,7 @@ int main() {
     std::string output_path = output_directory + "/" + output_filename;
     std::string output_path_spd = output_directory + "/" + output_filename_spd;
     std::string output_path_schur = output_directory + "/" + output_filename_schur;
+    std::string output_path_raw = output_directory + "/" + output_filename_raw;
 
     if (generate_times) {
         if (rank == 0) {
@@ -395,7 +400,7 @@ int main() {
         }
         if (rank == 0) {
             file.close();
-            saveCSV(temp_path, output_path_schur);
+            saveCSV(temp_path, output_path_raw);
         }
     }
 

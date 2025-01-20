@@ -7,7 +7,6 @@
 #SBATCH --partition=g100_usr_prod
 #SBATCH --mail-user=matteo.coppellotti@mail.polimi.it
 #SBATCH --mail-type=ALL
-#SBATCH --output=gen_data_mesh.out
 #SBATCH --mem=200GB
 
 WORKING_DIR=/g100/home/userexternal/mcoppell/mumps/fdaPDE-core/mumps_testing/computation_times/build

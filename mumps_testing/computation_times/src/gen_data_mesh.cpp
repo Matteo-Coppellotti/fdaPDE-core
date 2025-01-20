@@ -95,7 +95,7 @@ int main() {
     int size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
-    if (rank == 0) std::cout << "MPI initialized with" << size << "processes." << std::endl;
+    if (rank == 0) std::cout << "MPI initialized with " << size << " processes." << std::endl;
 
     // create output directory
     if (rank == 0) {

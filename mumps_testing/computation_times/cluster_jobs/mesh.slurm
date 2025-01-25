@@ -1,13 +1,14 @@
 #!/bin/bash
 
 #SBATCH --job-name=fdaPDE_mumps_mesh
-#SBATCH --time=12:00:00
-#SBATCH --nodes=4
-#SBATCH --ntasks-per-node=12
+#SBATCH --time=24:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=12
 #SBATCH --partition=g100_usr_prod
 #SBATCH --mail-user=matteo.coppellotti@mail.polimi.it
 #SBATCH --mail-type=ALL
-#SBATCH --mem=200GB
+#SBATCH --mem=300GB
 
 WORKING_DIR=/g100/home/userexternal/mcoppell/mumps/fdaPDE-core/mumps_testing/computation_times/build
 cd $WORKING_DIR

@@ -24,7 +24,7 @@ int main() {
     bool print_sparsity_patterns = false;
     bool generate_times = true;
     bool generate_spd_times = true;
-    bool generate_schur_times = true;
+    bool generate_schur_times = false;
     bool generate_raw_times = true;
 
     /**
@@ -50,7 +50,7 @@ int main() {
     /**
      * SET THE PROBLEM SIZE
      */
-    std::vector<int> N = {10, 100, 1000, 10000};
+    std::vector<int> N = {4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
 
     /**
      * SET THE SOLVERS TO BE USED
@@ -70,7 +70,7 @@ int main() {
     /**
      * SET THE NUMBER OF ITERATIONS
      */
-    int n_iter = 100;
+    int n_iter = 10;
 
     /**
      * SET THE PROBLEMS TO BE SOLVED
@@ -81,7 +81,8 @@ int main() {
      * - diffusion_transport (non-symmetric)
      */
     std::vector<std::string> problems = {"mass", "laplacian", "diffusion_transport"};
-    std::vector<std::string> problems_spd = {"mass", "laplacian"};
+    std::vector<std::string> problems_spd = {"mass"};
+    std::vector<std::string> problems_schur = {"mass"};
 
     // data structures
     std::vector<SparseMatrix<double>> mass_matrices;
@@ -212,9 +213,10 @@ int main() {
                 if (problem == "laplacian") { A = laplacian_matrices[i]; }
                 if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
                 for (const auto& solver : solvers) {
+		    bool one_time_flag = false;
                     for (int iter = 0; iter < n_iter; ++iter) {
                         auto t1 = high_resolution_clock::now();
-                        if (solver == "SparseLU" && rank == 0) {
+                        if (solver == "SparseLU" && rank == 0 && (N[i]<2500 || one_time_flag)) {
                             Eigen::SparseLU<SparseMatrix<double>> solver(A);
                             VectorXd x = solver.solve(forces[i]);
                         }
@@ -229,10 +231,11 @@ int main() {
                         auto t2 = high_resolution_clock::now();
                         duration<double> duration = t2 - t1;
                         MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
-                        if (rank == 0) {
+                        if (rank == 0 && !(solver == "SparseLU" && (N[i]>=2500 && !one_time_flag))) {
                             std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
                             file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
                         }
+			if (N[i]>=2500 && one_time_flag) one_time_flag = false;
                     }
                 }
             }
@@ -256,9 +259,10 @@ int main() {
                 if (problem == "mass") { A = mass_matrices[i]; }
                 if (problem == "laplacian") { A = laplacian_matrices[i]; }
                 for (const auto& solver : solvers_spd) {
+		    bool one_time_flag = true;
                     for (int iter = 0; iter < n_iter; ++iter) {
                         auto t1 = high_resolution_clock::now();
-                        if (solver == "SimplicialLLT" && rank == 0) {
+                        if (solver == "SimplicialLLT" && rank == 0 && (N[i]<2500 || one_time_flag)) {
                             Eigen::SimplicialLLT<SparseMatrix<double>> solver(A);
                             VectorXd x = solver.solve(forces[i]);
                         }
@@ -269,10 +273,11 @@ int main() {
                         auto t2 = high_resolution_clock::now();
                         duration<double> duration = t2 - t1;
                         MPI_Allreduce(MPI_IN_PLACE, &duration, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
-                        if (rank == 0) {
+                        if (rank == 0 && !(solver == "SimplicialLLT" && (N[i]>=2500 && !one_time_flag))) {
                             std::cout << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
                             file << N[i] << "," << problem << "," << solver << "," << duration.count() << "\n";
                         }
+			if (N[i] >= 2500 && one_time_flag) one_time_flag = false;
                     }
                 }
             }
@@ -293,11 +298,11 @@ int main() {
 
         for (size_t i = 0; i < N.size(); ++i) {
             SparseMatrix<double> A;
-            for (const auto& problem : problems) {
+            for (const auto& problem : problems_schur) {
                 if (problem == "mass") { A = mass_matrices[i]; }
                 if (problem == "laplacian") { A = laplacian_matrices[i]; }
                 if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }
-                for (int schur_size = N[i] / 10; schur_size < N[i]; schur_size += N[i] / 10) {   // change step ???
+                for (int schur_size = N[i]; schur_size < std::min(N[i]*10, N[i]*N[i]/2); schur_size += N[i]) {   // change step ???
                     for (int iter = 0; iter < n_iter; ++iter) {
                         auto t1 = high_resolution_clock::now();
                         MumpsSchur solver(A, schur_size);
@@ -330,7 +335,7 @@ int main() {
         std::vector<std::string> temp_solvers = {"Wrapped", "Non-wrapped"};
         for (size_t i = 0; i < N.size(); ++i) {
             SparseMatrix<double> A;
-            for (const auto& problem : problems_spd) {
+            for (const auto& problem : problems) {
                 if (problem == "mass") { A = mass_matrices[i]; }
                 if (problem == "laplacian") { A = laplacian_matrices[i]; }
                 if (problem == "diffusion_transport") { A = diffusion_transport_matrices[i]; }

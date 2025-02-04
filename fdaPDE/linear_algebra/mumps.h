@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <numeric>
 
 #include "../utils/assert.h"
 

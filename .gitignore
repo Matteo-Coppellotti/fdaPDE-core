@@ -52,3 +52,13 @@ experiments/
 mumps_testing/computation_times/build/
 mumps_testing/computation_times/build/**
 mumps_testing/computation_times/plots/**
+
+code_examples/build_cmake
+code_examples/build_cmake/**
+code_examples/build_makefile
+code_examples/build_makefile/**
+code_examples/cluster/build
+code_examples/cluster/build/**
+!code_examples/Makefile
+!code_examples/CMakeLists.txt
+!code_examples/user_config.cmake

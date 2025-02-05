@@ -37,20 +37,20 @@ int main() {
      *
      * Make sure that the name in not already used as it will be overwritten.
      */
-    std::string temp_filename = "temp.csv";
+    std::string temp_filename = "temp_p3.csv";
 
     /**
      * SET THE OUTPUT FILENAMES
      */
-    std::string output_filename = "computation_times.csv";
-    std::string output_filename_spd = "computation_times_spd.csv";
-    std::string output_filename_schur = "computation_times_schur.csv";
-    std::string output_filename_raw = "computation_times_raw.csv";
+    std::string output_filename = "computation_times_p3.csv";
+    std::string output_filename_spd = "computation_times_spd_p3.csv";
+    std::string output_filename_schur = "computation_times_schur_p3.csv";
+    std::string output_filename_raw = "computation_times_raw_p3.csv";
 
     /**
      * SET THE PROBLEM SIZE
      */
-    std::vector<int> N = {4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
+    std::vector<int> N = {4/*, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096*/};
 
     /**
      * SET THE SOLVERS TO BE USED
@@ -70,7 +70,7 @@ int main() {
     /**
      * SET THE NUMBER OF ITERATIONS
      */
-    int n_iter = 10;
+    int n_iter = 1;
 
     /**
      * SET THE PROBLEMS TO BE SOLVED
@@ -118,6 +118,7 @@ int main() {
          */
 
         // Eigen::VectorXd force(n*n);
+        int force_size;
         if (rank == 0) {
             auto mesh = meshUnitSquare(n);
             if (rank == 0) std::cout << "Generated mesh with " << n << " nodes" << std::endl;
@@ -125,7 +126,7 @@ int main() {
             Triangulation</* tangent_space = */ 2, /* embedding_space = */ 2> unit_square(
               mesh.nodes, mesh.elements, mesh.boundary);
 
-            FeSpace Vh(unit_square, P1<1>);
+            FeSpace Vh(unit_square, P3<1>);
             TrialFunction u(Vh);
             TestFunction v(Vh);
             auto a1 = integral(unit_square)(u * v);                   // mass matrix: SPD
@@ -148,13 +149,18 @@ int main() {
             // force = F.assemble();
             forces.push_back(F.assemble());
 
+            force_size = F.assemble().size();
+            std::cout << "force size: " << force_size << std::endl;
+            MPI_Bcast(&force_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
             // linear system: R1 * u = f
         } else {
             mass_matrices.push_back(SparseMatrix<double>());
             laplacian_matrices.push_back(SparseMatrix<double>());
             diffusion_transport_matrices.push_back(SparseMatrix<double>());
 
-            forces.push_back(VectorXd(n * n));
+            MPI_Bcast(&force_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            forces.push_back(VectorXd(force_size));
         }
         // MPI_Bcast(force.data(), n*n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         // forces.push_back(force);

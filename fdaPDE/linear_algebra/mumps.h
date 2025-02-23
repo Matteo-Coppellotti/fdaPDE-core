@@ -195,11 +195,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     inline const MumpsRinfoArray& mumpsRinfog() const { return m_mumpsRinfog; }
 
     // setter & getter for the raw mumps struct, tinkering with it is unadvides unless the user has an already good
-    // understanding of mumps and this wrapper
-    // [MSG for A.Palummo] Ho deciso di aggiungere questi getter in modo da permettere a persone più esperte di poter
-    // accedere direttamente alla struttura di MUMPS, in modo da poter settare parametri non accessibili tramite i
-    // metodi pubblici della classe. Questo permette di accedere a membri della struttura che non sono utilizzati da
-    // questa classe che potrebbero però essere utili nel caso vengano modificati manualmente alcuni icntl o cntl.
+    // understanding of mumps and this wrapper 
     inline DMUMPS_STRUC_C& mumpsRawStruct() { return m_mumps; }
     inline const DMUMPS_STRUC_C& mumpsRawStruct() const { return m_mumps; }
 
@@ -225,6 +221,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
     void _solve_impl(const DenseBase<BDerived>& b, DenseBase<XDerived>& x) const {
         fdapde_assert(m_factorizationIsOk && "The matrix must be factorized with factorize() before calling solve()");
 
+        // depending on compiler varsion in place solve might cause compilation issues with template expression rhs
         if (b.derived().data() == x.derived().data()) {   // inplace solve
             fdapde_assert((BDerived::Flags & RowMajorBit) == 0 && "Inplace solve doesn't support row-major rhs");
             if (getProcessRank() == 0) {
@@ -244,7 +241,7 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
                 m_mumps.rhs = const_cast<Scalar*>(buff.data());
             }
             mumps_execute(3);   // 3: solve
-            x.derived().resizeLike(b);
+            x.derived().resize(b.rows(), b.cols());
             if (getProcessRank() == 0) { x.derived() = buff; }
         }
 
@@ -309,22 +306,6 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
             x = res.sparseView();
         }
     }
-
-    // template <typename BDerived, typename XDerived>
-    // void solveSparse(const SparseMatrix<BDerived>& b, SparseMatrixBase<XDerived>& x) const {
-    //     SparseMatrix<Scalar, ColMajor> loc_b;
-    //     SparseMatrix<Scalar, ColMajor> loc_x;
-    //     if (BDerived::Flags & RowMajorBit || XDerived::Flags & RowMajorBit) {
-    //         loc_b = b;
-    //         loc_b.makeCompressed();
-    //         loc_x = x;
-    //         loc_x.makeCompressed();
-    //         loc_x = solve(loc_b);
-    //         x = loc_x;
-    //     } else {
-    //         x = solve(b);
-    //     }
-    // }
 
     Scalar determinant() const {
         fdapde_assert(m_computeDeterminant && "The determinant computation must be enabled");
@@ -516,9 +497,6 @@ template <class Derived> class MumpsBase : public SparseSolverBase<Derived> {
 
     virtual ~MumpsBase() { }
 
-    // [MSG for A.Palummo] Per quanto riguarda la versione "iper-parallelizzata" la trova commantata dopo il metodo
-    // define_matrix, ho fatto un paio di prove veloci con delle matrici prese da matrix market ma non ho riscontrato
-    // particolari differenze in termini di velocità di computazione.
     virtual void define_matrix(const MatrixType& matrix) {
         if (getProcessRank() == 0) {
             fdapde_assert(matrix.rows() == matrix.cols() && "The matrix must be square");

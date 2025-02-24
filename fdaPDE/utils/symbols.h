@@ -21,6 +21,7 @@
 #include <Eigen/Sparse>
 #include <memory>
 #include "traits.h"
+#include "../linear_algebra/mumps.h"
 
 // static structures, allocated on stack at compile time.
 template <int N, typename T = double> using SVector = Eigen::Matrix<T, N, 1>;
@@ -155,6 +156,35 @@ template <typename T> class SparseLU {
     }
     // direct access to Eigen::SparseLU
     std::shared_ptr<SparseLU_> operator->() { return solver_; }
+    Eigen::ComputationInfo info() const { return solver_->info(); }
+    operator bool() const { return computed_; }  
+};
+
+template <typename T> class MumpsLU {
+   private:
+    typedef fdapde::mumps::MumpsLU<T> MumpsLU_;
+    std::shared_ptr<MumpsLU_> solver_;   // wrap fdapde::mumps::MumpsLU into a movable object
+    bool computed_ = false;               // asserted true if factorization is successfully computed
+   public:
+    // default constructor
+    MumpsLU() = default;
+    // we expose only the compute and solve methods of fdapde::mumps::MumpsLU
+    void compute(const T& matrix) {
+        solver_ = std::make_shared<MumpsLU_>();
+        solver_->compute(matrix);
+	if (solver_->info() == Eigen::Success) { computed_ = true; }  
+    }
+
+    template <typename Rhs>   // solve method, dense rhs operand
+    const Eigen::Solve<MumpsLU_, Rhs> solve(const Eigen::MatrixBase<Rhs>& b) const {
+        return solver_->solve(b);
+    }
+    template <typename Rhs>   // solve method, sparse rhs operand
+    const Eigen::Solve<MumpsLU_, Rhs> solve(const Eigen::SparseMatrixBase<Rhs>& b) const {
+        return solver_->solve(b);
+    }
+    // direct access to fdapde::mumps::MumpsLU
+    std::shared_ptr<MumpsLU_> operator->() { return solver_; }
     Eigen::ComputationInfo info() const { return solver_->info(); }
     operator bool() const { return computed_; }  
 };
